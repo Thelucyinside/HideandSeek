@@ -29,7 +29,7 @@ read -r
 GITHUB_REPO_URL="https://github.com/Thelucyinside/HideandSeek.git" # <--- HIER DEINE URL EINTRAGEN!
 
 GAME_INSTALL_DIR="$HOME/hide-and-seek-client" # Wo das Spiel gespeichert wird
-START_COMMAND_NAME="hide-and-seek"            # So startest du das Spiel später
+START_COMMAND_NAME="start"            # So startest du das Spiel später
 LOCAL_VERSION_FILE_NAME=".version_hs"         # Kleine Datei für die Versionsnummer
 REMOTE_VERSION_FILE_NAME="VERSION.txt"        # Diese Datei muss in deinem GitHub-Repo sein
 
