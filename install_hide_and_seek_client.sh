@@ -26,9 +26,10 @@ read -r
 # --- Wichtige Einstellungen (bitte vorab anpassen!) ---
 # !!! ÄNDERE DIESE ZEILE ZU DEINEM AKTUELLEN GITHUB REPOSITORY !!!
 # Beispiel: GITHUB_REPO_URL="https://github.com/DeinUsername/DeinCoolesSpiel.git"
-GITHUB_REPO_URL="https://github.com/Thelucyinside/HideandSeek.git" # <--- HIER DEINE URL EINTRAGEN!L_DIR="$HOME/hide-and-seek-client"
+GITHUB_REPO_URL="https://github.com/DEIN_BENUTZERNAME/DEIN_REPOSITORYNAME.git" # <--- HIER DEINE URL EINTRAGEN!
+
 GAME_INSTALL_DIR="$HOME/hide-and-seek-client" # Wo das Spiel gespeichert wird
-START_COMMAND_NAME="start"            # So startest du das Spiel später
+START_COMMAND_NAME="hide-and-seek"            # So startest du das Spiel später
 LOCAL_VERSION_FILE_NAME=".version_hs"         # Kleine Datei für die Versionsnummer
 REMOTE_VERSION_FILE_NAME="VERSION.txt"        # Diese Datei muss in deinem GitHub-Repo sein
 
@@ -258,15 +259,15 @@ echo "2. Gib in die Adresszeile oben ein: ${YELLOW}http://localhost:5000${NC} un
 echo "   (Kein www davor, einfach nur das!)"
 echo "3. Die Spiel-Webseite sollte jetzt laden."
 echo ""
-echo -e "   ${GREEN}TIPP:${NC} Du kannst die Webseite wie eine App auf deinem"
+echo -e "   ${GREEN}COOLER TIPP:${NC} Du kannst die Webseite wie eine richtige App auf deinem"
 echo "   Startbildschirm speichern! So geht's meistens:"
-echo "   a. Wenn die Seite geladen ist, tippe auf das Menü-Symbol im Browser"
+echo "   a. Wenn die Seite geladen ist, tippe auf das ${YELLOW}Menü-Symbol${NC} im Browser"
 echo "      (oft drei Punkte oder drei Striche oben rechts)."
-echo "   b. Suche nach einer Option wie 'Zum Startbildschirm hinzufügen',"
-echo "      'App installieren' oder 'Seite hinzufügen zu...'"
+echo "   b. Suche nach einer Option wie ${YELLOW}'Zum Startbildschirm hinzufügen'${NC},"
+echo "      ${YELLOW}'App installieren'${NC} oder ${YELLOW}'Seite hinzufügen zu...'${NC}."
 echo "   c. Folge den Anweisungen. Danach hast du ein Spiel-Icon auf deinem Handy!"
 echo ""
-echo "Viel Spaß!"
+echo "Viel Spaß beim Verstecken und Suchen!"
 echo -e "${GREEN}Dein Hide and Seek Installations-Helfer :)${NC}"
 
 exit 0
