@@ -4,7 +4,6 @@ import threading
 import json
 import time
 import random
-import traceback # Import für detailliertere Fehlermeldungen
 from tasks import TASKS # Annahme: tasks.py existiert und enthält eine Liste von Aufgaben
 
 HOST = '0.0.0.0'
@@ -93,9 +92,9 @@ def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message=
             "status": GAME_STATE_LOBBY,
             "status_display": GAME_STATE_DISPLAY_NAMES[GAME_STATE_LOBBY],
             "players": {},
-            "game_start_time_actual": None, # Start der RUNNING Phase (Epoch-Zeit)
-            "game_end_time": None, # Ende der RUNNING Phase (Epoch-Zeit)
-            "hider_wait_end_time": None, # Ende der HIDER_WAIT Phase (Epoch-Zeit)
+            "game_start_time_actual": None, # Start der RUNNING Phase
+            "game_end_time": None, # Ende der RUNNING Phase
+            "hider_wait_end_time": None, # Ende der HIDER_WAIT Phase
             "available_tasks": list(TASKS),
             "game_over_message": None,
             "hider_warning_active_for_current_cycle": False,
@@ -103,10 +102,9 @@ def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message=
             "total_active_players_for_early_end": 0,
             # Phasen-spezifische Daten
             "current_phase_index": -1, # Beginnt bei -1, wird beim Start von HIDER_WAIT zu 0 (Initial Reveal)
-            "current_phase_start_time": 0, # Startzeit der aktuell aktiven Phase (Epoch-Zeit)
-            "updates_done_in_current_phase": 0, # Zähler für Updates in der aktuellen Phase
-            "next_location_broadcast_time": float('inf'), # Epoch-Zeit des nächsten Broadcasts
-            "_last_calculated_phase_idx_for_broadcast": -2, # Interne Hilfsvariable für Phasenübergang-Erkennung
+            "current_phase_start_time": 0,
+            "updates_done_in_current_phase": 0,
+            "next_location_broadcast_time": float('inf'),
         })
         print("SERVER LOGIC: Spielzustand auf Initialwerte zurückgesetzt.")
 
@@ -191,33 +189,28 @@ def _calculate_and_set_next_broadcast_time(current_time):
         phase_ended_by_updates = ("updates_in_phase" in phase_def and not phase_def.get("is_initial_reveal") and
                                   game_data.get("updates_done_in_current_phase", 0) >= phase_def["updates_in_phase"])
 
-        # Logik für Phasenübergang
         if phase_def.get("is_initial_reveal") and game_data.get("updates_done_in_current_phase", 0) > 0:
             # Initial Reveal wurde gerade gemacht, gehe zur nächsten Phase
             game_data["current_phase_index"] += 1
-            phase_idx = game_data["current_phase_index"] # Aktualisiere phase_idx
-            # Setze aktuelle Phase neu, falls der Index noch nicht die neue Phase darstellt
-            if phase_idx < len(PHASE_DEFINITIONS):
-                game_data["current_phase_start_time"] = current_time # Beginn der neuen Phase
-                game_data["updates_done_in_current_phase"] = 0 # Reset für neue Phase
-                game_data["_last_calculated_phase_idx_for_broadcast"] = phase_idx
-                phase_def = PHASE_DEFINITIONS[phase_idx] # phase_def neu laden
-                print(f"SERVER LOGIC: Übergang zu Phase {phase_idx}: {phase_def['name']} nach Initial Reveal.")
+            phase_idx = game_data["current_phase_index"]
         elif phase_ended_by_duration or phase_ended_by_updates:
             game_data["current_phase_index"] += 1
-            phase_idx = game_data["current_phase_index"] # Aktualisiere phase_idx
-            # Setze aktuelle Phase neu
-            if phase_idx < len(PHASE_DEFINITIONS):
-                game_data["current_phase_start_time"] = current_time # Beginn der neuen Phase
-                game_data["updates_done_in_current_phase"] = 0 # Reset für neue Phase
-                game_data["_last_calculated_phase_idx_for_broadcast"] = phase_idx
-                phase_def = PHASE_DEFINITIONS[phase_idx] # phase_def neu laden
-                print(f"SERVER LOGIC: Übergang zu Phase {phase_idx}: {phase_def['name']} (Dauer/Updates erfüllt).")
+            phase_idx = game_data["current_phase_index"]
 
         if phase_idx >= len(PHASE_DEFINITIONS): # Erneut prüfen nach Inkrementierung
             game_data["next_location_broadcast_time"] = float('inf')
             print("SERVER LOGIC: Alle Update-Phasen abgeschlossen. Standort-Updates beendet (Spiel läuft weiter bis Zeitende).")
             return
+        
+        # Wenn eine neue Phase beginnt (oder Index aktualisiert wurde)
+        if phase_idx != game_data.get("_last_calculated_phase_idx_for_broadcast", -2) or \
+           (phase_def.get("is_initial_reveal") and game_data.get("updates_done_in_current_phase",0) == 0 ): # Beim ersten Mal für Initial Reveal
+
+            game_data["current_phase_start_time"] = current_time 
+            game_data["updates_done_in_current_phase"] = 0 # Reset für neue Phase (außer bei Initial Reveal, wo 1 Update zählt)
+            phase_def = PHASE_DEFINITIONS[phase_idx] # phase_def neu laden
+            print(f"SERVER LOGIC: Starte/Weiter mit Phase {phase_idx}: {phase_def['name']}")
+            game_data["_last_calculated_phase_idx_for_broadcast"] = phase_idx
         
         # Nächsten Broadcast-Zeitpunkt für die aktuelle (ggf. neue) Phase setzen
         if "update_interval_seconds" in phase_def:
@@ -225,13 +218,10 @@ def _calculate_and_set_next_broadcast_time(current_time):
         elif "updates_in_phase" in phase_def and phase_def["updates_in_phase"] > 0:
             # Für den Initial Reveal (updates_in_phase=1) wird dies den ersten Broadcast planen
             # Für andere Phasen wird es den nächsten Broadcast basierend auf dem Intervall planen
-            # Da wir updates_done_in_current_phase bei Phasenstart auf 0 setzen, wird das erste Intervall
-            # korrekt vom Phasenstart aus berechnet. Für nachfolgende Updates in der gleichen Phase,
-            # wird das Intervall einfach zum aktuellen Zeitpunkt addiert.
             interval = phase_def["duration_seconds"] / phase_def["updates_in_phase"]
             game_data["next_location_broadcast_time"] = current_time + interval
         else: 
-            game_data["next_location_broadcast_time"] = float('inf') # Kein Update-Mechanismus definiert
+            game_data["next_location_broadcast_time"] = float('inf')
         
         if game_data["next_location_broadcast_time"] != float('inf'):
             delay_seconds = int(game_data['next_location_broadcast_time'] - current_time)
@@ -245,68 +235,19 @@ def send_data_to_one_client(conn, player_id_for_perspective):
     try:
         with data_lock:
             if "players" not in game_data or player_id_for_perspective not in game_data["players"]:
-                # Wenn der Spieler nicht mehr existiert, sende ein Reset-Signal oder eine Fehlermeldung
                 if conn:
-                    null_player_payload = {"type": "game_update", "player_id": None, "error_message": "Du wurdest aus dem Spiel entfernt oder der Server wurde zurückgesetzt.", "game_state": {"status": "disconnected", "status_display": "Server zurückgesetzt. Bitte neu beitreten."}}
+                    null_player_payload = {"type": "game_update", "player_id": None, "message": "Du wurdest aus dem Spiel entfernt oder der Server wurde zurückgesetzt."}
                     try: conn.sendall(json.dumps(null_player_payload).encode('utf-8') + b'\n')
                     except: pass 
                 return
 
             player_info = game_data["players"].get(player_id_for_perspective)
-            if not player_info: return # Sollte durch obige Prüfung abgedeckt sein
+            if not player_info: return
 
             player_name_for_log = player_info.get("name", f"Unbekannt_{player_id_for_perspective}")
             p_role = player_info.get("current_role", "hider")
             current_game_status = game_data.get("status", GAME_STATE_LOBBY)
             current_status_display = game_data.get("status_display", GAME_STATE_DISPLAY_NAMES.get(current_game_status, "Unbekannter Status"))
-
-            # --- NEU: Phaseninformationen für die UI ---
-            phase_info_for_client = None
-            # Sende Phaseninfo nur, wenn das Spiel gestartet wurde oder gerade läuft
-            # Und wenn der Spieler auch Teil des Spiels ist (confirmed_for_lobby ist hier ein guter Indikator,
-            # dass der Spieler über die Lobby hinaus ist)
-            if player_info and player_info.get("confirmed_for_lobby") and \
-               current_game_status in [GAME_STATE_HIDER_WAIT, GAME_STATE_RUNNING]:
-                
-                simplified_phase_definitions = []
-                for idx, phase_def in enumerate(PHASE_DEFINITIONS):
-                    simplified_phase_definitions.append({
-                        "name": phase_def.get("name", f"Phase {idx}"),
-                        "duration_seconds": phase_def.get("duration_seconds"),
-                        "updates_in_phase": phase_def.get("updates_in_phase"),
-                        "update_interval_seconds": phase_def.get("update_interval_seconds"),
-                        "is_initial_reveal": phase_def.get("is_initial_reveal", False)
-                    })
-
-                current_phase_idx = game_data.get("current_phase_index", -1)
-                current_phase_details_for_client = None
-                if 0 <= current_phase_idx < len(PHASE_DEFINITIONS):
-                    current_phase_on_server = PHASE_DEFINITIONS[current_phase_idx]
-                    current_phase_details_for_client = {
-                        "index": current_phase_idx,
-                        "name": current_phase_on_server.get("name", f"Phase {current_phase_idx}"),
-                        # Zeitstempel in Millisekunden für JS Date Objekte
-                        "start_time_epoch_ms": int(game_data.get("current_phase_start_time", 0) * 1000),
-                        "duration_seconds": current_phase_on_server.get("duration_seconds"),
-                        "updates_in_phase": current_phase_on_server.get("updates_in_phase"),
-                        "update_interval_seconds": current_phase_on_server.get("update_interval_seconds"),
-                        "is_initial_reveal": current_phase_on_server.get("is_initial_reveal", False),
-                        "updates_done_this_phase": game_data.get("updates_done_in_current_phase", 0)
-                    }
-                
-                next_broadcast_time_val = game_data.get("next_location_broadcast_time", float('inf'))
-                # Sende als Millisekunden-Timestamp oder null
-                next_broadcast_time_ms_for_client = int(next_broadcast_time_val * 1000) if next_broadcast_time_val != float('inf') else None
-
-                phase_info_for_client = {
-                    "definitions": simplified_phase_definitions,
-                    "current_details": current_phase_details_for_client,
-                    "next_broadcast_time_epoch_ms": next_broadcast_time_ms_for_client,
-                    "hider_departure_config_seconds": HIDER_INITIAL_DEPARTURE_TIME_SECONDS,
-                    # Spielstart (Beginn RUNNING Phase) für Referenz in UI, falls benötigt
-                    "game_start_time_actual_epoch_ms": int(game_data.get("game_start_time_actual",0) * 1000) if game_data.get("game_start_time_actual") else None
-                }
-            # --- ENDE NEU ---
 
             payload = {
                 "type": "game_update",
@@ -330,8 +271,7 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                 "hider_location_update_imminent": player_info.get("has_pending_location_warning", False) if p_role == "hider" else False,
                 "early_end_requests_count": len(game_data.get("early_end_requests", set())),
                 "total_active_players_for_early_end": game_data.get("total_active_players_for_early_end", 0),
-                "player_has_requested_early_end": player_id_for_perspective in game_data.get("early_end_requests", set()),
-                "phase_info": phase_info_for_client # Hinzufügen der neuen Phaseninfo
+                "player_has_requested_early_end": player_id_for_perspective in game_data.get("early_end_requests", set())
             }
             
             if p_role == "hider":
@@ -356,6 +296,7 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                             "timestamp": time.strftime("%H:%M:%S", time.localtime(h_info.get("last_location_timestamp", time.time())))
                         }
                 payload["hider_locations"] = visible_hiders
+            # Power-ups wurden entfernt, daher kein "power_ups_available" mehr im Payload.
 
         if conn and payload:
             json_payload = json.dumps(payload)
@@ -368,6 +309,7 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                     game_data["players"][player_id_for_perspective]["client_conn"] = None
     except Exception as e:
         print(f"SERVER SEND (ERROR - UNEXPECTED): P:{player_id_for_perspective} ({player_name_for_log}): Unerwarteter Fehler beim Senden: {e}")
+        import traceback
         traceback.print_exc()
 
 def broadcast_full_game_state_to_all(exclude_pid=None):
@@ -417,7 +359,7 @@ def check_game_conditions_and_end():
                 if p_info.get("task") and p_info.get("task_deadline") and current_time > p_info["task_deadline"]:
                     task_description_for_log = p_info.get('task',{}).get('description','N/A')
                     player_name_for_log = p_info.get('name','N/A')
-                    if p_id in game_data.get("players", {}): # Re-check if player still exists
+                    if p_id in game_data.get("players", {}):
                         game_data["players"][p_id]["task"] = None
                         game_data["players"][p_id]["task_deadline"] = None
                         broadcast_server_text_notification(f"Hider {player_name_for_log} hat Aufgabe '{task_description_for_log}' NICHT rechtzeitig geschafft! Aufgabe entfernt.")
@@ -474,7 +416,6 @@ def handle_client_connection(conn, addr):
 
                         if action == "JOIN_GAME" and player_id is None:
                             if current_game_status_in_handler in [GAME_STATE_HIDER_WINS, GAME_STATE_SEEKER_WINS]:
-                                # Allow re-join after game end by resetting server if a new join comes in after game over
                                 reset_game_to_initial_state(notify_clients_about_reset=False) 
                                 current_game_status_in_handler = game_data.get("status")
                             
@@ -517,7 +458,7 @@ def handle_client_connection(conn, addr):
                             try:
                                 ack_payload = {"type": "acknowledgement", "message": "Server wurde erfolgreich zurückgesetzt."}
                                 conn.sendall(json.dumps(ack_payload).encode('utf-8') + b'\n')
-                            except Exception as e: pass # Don't care if we can't send ack, client will disconnect anyway
+                            except Exception as e: pass
                             return
 
                         if not player_id or player_id not in game_data.get("players", {}):
@@ -550,7 +491,7 @@ def handle_client_connection(conn, addr):
                                 current_player_data["location"] = [lat, lon, accuracy] 
                                 current_player_data["last_location_timestamp"] = time.time()
                                 if current_player_data.get("has_pending_location_warning"):
-                                    if time.time() > current_player_data.get("warning_sent_time", 0): # Only count as updated if warning was sent
+                                    if time.time() > current_player_data.get("warning_sent_time", 0):
                                          current_player_data["last_location_update_after_warning"] = time.time()
                                 send_data_to_one_client(conn, player_id)
                         
@@ -611,10 +552,12 @@ def handle_client_connection(conn, addr):
                                 broadcast_full_game_state_to_all()
                             else: send_data_to_one_client(conn, player_id)
                         
+                        # USE_POWERUP Action wurde entfernt
+                        
                         elif action == "LEAVE_GAME_AND_GO_TO_JOIN":
                             if player_id in game_data.get("players", {}):
                                 del game_data["players"][player_id] 
-                            player_id_that_left = player_id; player_id = None # Dereference player_id for this connection handler
+                            player_id_that_left = player_id; player_id = None
                             try: conn.sendall(json.dumps({"type": "acknowledgement", "message": "Du hast das Spiel verlassen."}).encode('utf-8') + b'\n')
                             except: pass 
                             broadcast_full_game_state_to_all()
@@ -636,30 +579,24 @@ def handle_client_connection(conn, addr):
                                     game_data["early_end_requests"].clear() 
                                 broadcast_full_game_state_to_all()
                             else: send_data_to_one_client(conn, player_id)
-            except json.JSONDecodeError: 
-                print(f"SERVER JSON (ERROR) ({addr[1]}): P:{player_id}. Ungültiges JSON empfangen, Puffer gelöscht.")
-                buffer = "" # Clear buffer on malformed JSON
-            except (ConnectionResetError, BrokenPipeError, OSError): 
-                # print(f"SERVER CONN (LOST) ({addr[1]}): P:{player_id}. Verbindung verloren.")
-                break 
+            except json.JSONDecodeError: buffer = "" # Fehlerhafte JSON, Puffer löschen
+            except (ConnectionResetError, BrokenPipeError, OSError): break 
             except Exception as e_inner_loop:
-                print(f"SERVER UNEXPECTED INNER LOOP ERROR ({addr[1]}): P:{player_id}. Aktion: {action_for_log}. Fehler: {e_inner_loop}")
-                traceback.print_exc()
+                print(f"SERVER UNEXPECTED INNER LOOP ERROR ({addr[1]}): P:{player_id}. Aktion: {action_for_log}. Fehler: {e_inner_loop}"); import traceback; traceback.print_exc()
     except Exception as e_outer_handler: 
-        print(f"SERVER UNEXPECTED HANDLER ERROR ({addr[1]}): P:{player_id}. Fehler: {e_outer_handler}")
-        traceback.print_exc()
+        print(f"SERVER UNEXPECTED HANDLER ERROR ({addr[1]}): P:{player_id}. Fehler: {e_outer_handler}"); import traceback; traceback.print_exc()
     finally:
         # print(f"SERVER CLEANUP ({addr[1]}): P:{player_id}, Name: {player_name_for_log}. Verbindung wird geschlossen.")
         player_affected_by_disconnect = False
         with data_lock:
             if player_id and player_id in game_data.get("players", {}):
-                if game_data["players"][player_id].get("client_conn") is conn: # Only clear if this connection is still associated
+                if game_data["players"][player_id].get("client_conn") is conn:
                     game_data["players"][player_id]["client_conn"] = None
                     player_affected_by_disconnect = True
         if player_affected_by_disconnect and game_data.get("players"): 
             if game_data.get("status") == GAME_STATE_RUNNING:
-                if check_game_conditions_and_end(): pass # Re-check game state after disconnect
-            broadcast_full_game_state_to_all() # Inform other clients about player list change
+                if check_game_conditions_and_end(): pass
+            broadcast_full_game_state_to_all()
         if conn:
             try: conn.close()
             except: pass
@@ -715,14 +652,13 @@ def game_logic_thread():
                         game_data["current_phase_index"] = 0
                         game_data["current_phase_start_time"] = current_time # Start der ersten Phase ist jetzt
                         game_data["updates_done_in_current_phase"] = 0 # Noch keine Updates in Phase 0 erfolgt
-                        game_data["_last_calculated_phase_idx_for_broadcast"] = -1 # Reset for initial calculation
-
+                        
                         # Der Initial Reveal soll sofort passieren
                         initial_phase_def = PHASE_DEFINITIONS[0]
                         if initial_phase_def.get("is_initial_reveal"):
                              game_data["next_location_broadcast_time"] = current_time # Sofortiger Broadcast
                              print(f"SERVER LOGIC: Initialer Hider-Standort-Broadcast wird sofort nach Hider-Wartezeit durchgeführt.")
-                        else: # Sollte nicht passieren, ist ein Fallback
+                        else: # Sollte nicht passieren
                              _calculate_and_set_next_broadcast_time(current_time)
 
 
@@ -754,13 +690,8 @@ def game_logic_thread():
                     if 0 <= current_phase_idx_for_warn < len(PHASE_DEFINITIONS):
                         phase_def_warn = PHASE_DEFINITIONS[current_phase_idx_for_warn]
                         # Keine Warnung für sehr kurze Intervalle (z.B. Phase 5 oder wenn Intervall < Warnzeit + Puffer)
-                        interval_calc_value = 1000 # Default if no interval or duration/updates is defined
-                        if phase_def_warn.get("update_interval_seconds"):
-                            interval_calc_value = phase_def_warn["update_interval_seconds"]
-                        elif phase_def_warn.get("updates_in_phase") > 0 and phase_def_warn.get("duration_seconds") > 0:
-                            interval_calc_value = phase_def_warn["duration_seconds"] / phase_def_warn["updates_in_phase"]
-
-                        if interval_calc_value < HIDER_WARNING_BEFORE_SEEKER_UPDATE_SECONDS + 5: # Small buffer for safety
+                        interval_check = phase_def_warn.get("update_interval_seconds", phase_def_warn.get("duration_seconds", 1000) / phase_def_warn.get("updates_in_phase",1) if phase_def_warn.get("updates_in_phase",0)>0 else 1000)
+                        if interval_check < HIDER_WARNING_BEFORE_SEEKER_UPDATE_SECONDS + 5:
                             allow_warning = False
                     
                     if allow_warning and \
@@ -773,13 +704,12 @@ def game_logic_thread():
                             if p_info.get("current_role") == "hider" and p_info.get("status_ingame") == "active":
                                 if not p_info.get("has_pending_location_warning"): 
                                     p_info["has_pending_location_warning"] = True; p_info["warning_sent_time"] = current_time
-                                    p_info["last_location_update_after_warning"] = 0 # Reset this to detect if new location comes in AFTER warning
+                                    p_info["last_location_update_after_warning"] = 0 
                                     hiders_needing_warning_update = True
                                     if p_info.get("client_conn"):
                                         event_payload_warn = {"type": "game_event", "event_name": "hider_location_update_due"}
                                         try: p_info["client_conn"].sendall(json.dumps(event_payload_warn).encode('utf-8') + b'\n')
                                         except: 
-                                             # Handle client disconnection
                                              if "players" in game_data and p_id in game_data["players"] and game_data["players"][p_id].get("client_conn") == p_info.get("client_conn"):
                                                 game_data["players"][p_id]["client_conn"] = None
                         if hiders_needing_warning_update: broadcast_needed_due_to_time_or_state_change = True 
@@ -791,19 +721,15 @@ def game_logic_thread():
                         
                         player_list_copy = list(game_data.get("players", {}).items())
                         for p_id_h, p_info_h in player_list_copy:
-                            if p_id_h not in game_data.get("players", {}): continue # Player might have left
+                            if p_id_h not in game_data.get("players", {}): continue
                             if p_info_h.get("current_role") == "hider" and p_info_h.get("status_ingame") == "active":
                                 if p_info_h.get("has_pending_location_warning"): 
-                                    # If last_location_update_after_warning is older than warning_sent_time, it means no new location was sent after warning
                                     if p_info_h.get("last_location_update_after_warning", 0) <= p_info_h.get("warning_sent_time", 0):
                                         active_hiders_who_failed_update_names.append(p_info_h.get('name', 'Unbekannt'))
-                                # Reset warning flags regardless if they updated or not
                                 game_data["players"][p_id_h]["has_pending_location_warning"] = False
-                                game_data["players"][p_id_h]["warning_sent_time"] = 0
-                                game_data["players"][p_id_h]["last_location_update_after_warning"] = 0
 
                         if active_hiders_who_failed_update_names:
-                             broadcast_server_text_notification(f"Folgende Hider haben Standort nach Warnung NICHT aktualisiert: {', '.join(active_hiders_who_failed_update_names)}. Sie bleiben aktiv, aber ohne aktuellste Position für Seeker.")
+                             broadcast_server_text_notification(f"Folgende Hider haben Standort nach Warnung nicht aktualisiert: {', '.join(active_hiders_who_failed_update_names)}. Sie bleiben aktiv.")
                         
                         game_data["updates_done_in_current_phase"] += 1
 
@@ -832,7 +758,6 @@ def game_logic_thread():
                     time_since_game_end = current_time - game_data.get("game_end_time", current_time)
                     if time_since_game_end < 30 and int(current_time) % 5 == 0: broadcast_needed_due_to_time_or_state_change = True
                     elif time_since_game_end < 120 and int(current_time) % 15 == 0: broadcast_needed_due_to_time_or_state_change = True
-                    # Only broadcast once right when game status changes, then less frequently
                     elif previous_game_status_for_logic != current_game_status : broadcast_needed_due_to_time_or_state_change = True
 
         if game_ended_this_tick or broadcast_needed_due_to_time_or_state_change:
