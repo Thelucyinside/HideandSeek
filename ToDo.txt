@@ -1,0 +1,6 @@
+HIDE AND SEEK TO DO
+- Skip Tasks
+- kein ausscheiden bei Nichterfüllung der Aufgabe
+- Zone?
+- Power Ups des suchers anpassen
+- kein ausscheiden bei disconnects/kein Standort.
