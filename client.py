@@ -35,6 +35,7 @@ client_view_data = {
     "current_task": None,
     "hider_leaderboard": [],
     "hider_locations": {},
+    # "power_ups_available" wurde entfernt
     "game_message": None,
     "error_message": None,
     "join_error": None,
@@ -45,8 +46,7 @@ client_view_data = {
     "player_has_requested_early_end": False,
     "current_server_host": SERVER_HOST,
     "current_server_port": SERVER_PORT,
-    "task_skips_available": 0,
-    "phase_info": None # NEU: Für Phasenfortschrittsanzeige
+    "task_skips_available": 0
 }
 client_data_lock = threading.Lock()
 server_socket_global = None
@@ -149,7 +149,6 @@ def network_communication_thread():
                             client_view_data["player_id"] = None; client_view_data["player_name"] = None 
                             client_view_data["role"] = None; client_view_data["confirmed_for_lobby"] = False
                             client_view_data["player_is_ready"] = False
-                            client_view_data["phase_info"] = None # NEU: Reset phase_info on player_id reset
                         elif "player_id" in message and message["player_id"] is not None:
                             client_view_data["player_id"] = message["player_id"]; client_view_data["join_error"] = None
                         
@@ -157,11 +156,10 @@ def network_communication_thread():
                             "player_name", "role", "confirmed_for_lobby", "player_is_ready", 
                             "player_status", "location", "game_state", "lobby_players", 
                             "all_players_status", "current_task", "hider_leaderboard", 
-                            "hider_locations", 
+                            "hider_locations", # "power_ups_available" wurde entfernt
                             "hider_location_update_imminent",
                             "early_end_requests_count", "total_active_players_for_early_end",
-                            "player_has_requested_early_end", "task_skips_available",
-                            "phase_info" # NEU
+                            "player_has_requested_early_end", "task_skips_available" 
                         ]
                         for key in update_keys:
                             if key in message: client_view_data[key] = message[key]
@@ -169,7 +167,6 @@ def network_communication_thread():
                         if message.get("error_message") and message["player_id"] is None:
                             client_view_data["error_message"] = message["error_message"]
                             client_view_data["join_error"] = message["error_message"]
-                            client_view_data["phase_info"] = None # NEU: Reset phase_info on error
 
                     elif msg_type == "server_text_notification":
                         game_msg_text = message.get("message", "Server Nachricht")
@@ -195,7 +192,6 @@ def network_communication_thread():
                             if client_view_data["player_id"] is not None:
                                 client_view_data["player_id"] = None; client_view_data["player_name"] = None
                                 client_view_data["role"] = None
-                            client_view_data["phase_info"] = None # NEU: Reset phase_info on critical error
                     
                     elif msg_type == "acknowledgement":
                         ack_message = message.get("message", "Aktion bestätigt.")
@@ -264,10 +260,10 @@ def join_game_route():
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "join_error": None, "error_message": None, "game_message": None,
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
+            # "power_ups_available" wurde entfernt
             "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0,
-            "phase_info": None # NEU
+            "player_has_requested_early_end": False, "task_skips_available": 0 
         })
         if "game_state" not in client_view_data or client_view_data["game_state"] is None: 
             client_view_data["game_state"] = {"status": "disconnected", "status_display": "Initialisiere..."}
@@ -371,6 +367,7 @@ def set_ready_route(): return handle_generic_action("SET_READY", "ready_status",
 def complete_task_route(): return handle_generic_action("TASK_COMPLETE")
 @app.route('/catch_hider', methods=['POST'])
 def catch_hider_route(): return handle_generic_action("CATCH_HIDER", "hider_id_to_catch", "hider_id_to_catch")
+# @app.route('/use_powerup', methods=['POST']) wurde entfernt
 
 @app.route('/leave_game_and_go_to_join_screen', methods=['POST'])
 def leave_game_and_go_to_join_screen_route():
@@ -383,11 +380,11 @@ def leave_game_and_go_to_join_screen_route():
             "player_id": None, "player_name": None, "role": None,
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
+            # "power_ups_available" wurde entfernt
             "game_message": None, "error_message": None, "join_error": None, 
             "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0,
-            "phase_info": None # NEU
+            "player_has_requested_early_end": False, "task_skips_available": 0 
         })
         if "game_state" in client_view_data and client_view_data["game_state"] is not None:
             client_view_data["game_state"]["status"] = GAME_STATE_LOBBY 
