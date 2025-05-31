@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Hide and Seek JS Client</title>
-    <!-- PWA Manifest Verlinkung - Pfad relativ zum Root der Webseite -->
     <link rel="manifest" href="manifest.json">
-    <!-- Theme Color für Browser-UI -->
     <meta name="theme-color" content="#007bff">
 
     <style>
@@ -30,7 +28,9 @@
         button.unready { background-color: #ffc107; color: #333; } button.unready:hover { background-color: #d39e00; }
         button.action-btn { background-color: #17a2b8; margin-top: 5px; font-size: 0.9em; padding: 8px 10px;}
         button.action-btn:hover { background-color: #117a8b; }
-        input[type="text"], select { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em;}
+        button.warning-btn { background-color: #ffc107; color: #212529; }
+        button.warning-btn:hover { background-color: #e0a800; }
+        input[type="text"], input[type="number"], select { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em;}
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555;}
         #mapLink a { color: #007bff; text-decoration: none; font-weight: normal; }
         .countdown { font-size: 1.8em; font-weight: bold; color: #dc3545; text-align: center; padding:10px; background-color: #fff3cd; border-radius: 5px; margin: 10px 0;}
@@ -42,6 +42,7 @@
         .centered-text { text-align: center; }
         .dimmed { color: #777; }
         #messages-section p { margin: 5px 0;}
+        #early-end-vote-info { margin-top: 15px; padding: 10px; background-color: #e9ecef; border-radius: 5px; text-align: center;}
     </style>
 </head>
 <body>
@@ -51,6 +52,11 @@
             <p class="info">Server Verbindung: <span id="join-socket-status-display" class="dimmed">Prüfe...</span></p>
             <p class="info">Spiel Status: <span id="join-game-status-display" class="dimmed">Verbinde...</span></p>
             <form id="join-form">
+                <label for="server-host">Server IP/Hostname:</label>
+                <input type="text" id="server-host" name="server_host" value="127.0.0.1" required>
+                <label for="server-port">Server Port:</label>
+                <input type="number" id="server-port" name="server_port" value="65432" min="1" max="65535" required>
+                
                 <label for="nickname">Nickname:</label>
                 <input type="text" id="nickname" name="nickname" required>
                 <label for="role-choice">Gewünschte Rolle:</label>
@@ -91,6 +97,10 @@
             <p id="hider-warning-text" class="error" style="display:none; font-weight:bold; text-align:center;">
                 ACHTUNG HIDER! Dein Standort wird bald an die Seeker gesendet. Stelle sicher, dass die App deinen aktuellen Standort übermittelt!
             </p>
+            <div id="early-end-vote-container" style="display:none;">
+                 <button id="request-early-end-button" class="warning-btn">Runde vorzeitig beenden</button>
+                 <p id="early-end-vote-info" class="dimmed">0/0 Spieler wollen Runde beenden.</p>
+            </div>
         </div>
 
         <div id="messages-section" class="container section" style="padding:0;">
@@ -159,21 +169,16 @@
                     <tbody></tbody>
                 </table>
             </div>
-            <button onclick="handleGameOverReset()">Zurück zur Lobby (Neues Spiel)</button>
+            <button id="go-to-registration-button" onclick="handleGoToRegistration()">Neues Spiel registrieren</button>
         </div>
     </div>
 
     <script>
-        // Service Worker Registrierung
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js', { scope: '/' }) 
-                    .then(registration => {
-                        console.log('ServiceWorker Registrierung erfolgreich, Scope:', registration.scope);
-                    })
-                    .catch(error => {
-                        console.error('ServiceWorker Registrierung fehlgeschlagen:', error);
-                    });
+                    .then(registration => console.log('ServiceWorker Registrierung erfolgreich, Scope:', registration.scope))
+                    .catch(error => console.error('ServiceWorker Registrierung fehlgeschlagen:', error));
             });
         }
 
@@ -188,6 +193,9 @@
         let locationWatchId = null;
         let lastLocationSentTime = 0;
 
+        const SERVER_HOST_KEY = 'hideAndSeekServerHost';
+        const SERVER_PORT_KEY = 'hideAndSeekServerPort';
+
         function $(selector) { return document.querySelector(selector); }
         function show(id) { const el = $(`#${id}`); if (el) el.classList.add('visible'); }
         function hide(id) { const el = $(`#${id}`); if (el) el.classList.remove('visible'); }
@@ -197,6 +205,35 @@
             const el = $(`#${id}`);
             if (el) el.style.display = showFlag ? displayType : 'none';
         }
+
+        function saveServerDetails(host, port) {
+            try {
+                localStorage.setItem(SERVER_HOST_KEY, host);
+                localStorage.setItem(SERVER_PORT_KEY, port);
+            } catch (e) { console.warn("localStorage nicht verfügbar oder Fehler beim Speichern:", e); }
+        }
+
+        function loadServerDetails() {
+            try {
+                const host = localStorage.getItem(SERVER_HOST_KEY);
+                const port = localStorage.getItem(SERVER_PORT_KEY);
+                return { host, port };
+            } catch (e) {
+                console.warn("localStorage nicht verfügbar oder Fehler beim Laden:", e);
+                return { host: null, port: null };
+            }
+        }
+        
+        function initializeServerInputs() {
+            const loadedDetails = loadServerDetails();
+            const serverHostInput = $('#server-host');
+            const serverPortInput = $('#server-port');
+
+            if (serverHostInput && loadedDetails.host) serverHostInput.value = loadedDetails.host;
+            // Default value is already in HTML, so only overwrite if localStorage has something
+            if (serverPortInput && loadedDetails.port) serverPortInput.value = loadedDetails.port;
+        }
+
 
         function updateUI(data) {
             console.log("UI Update mit Daten:", JSON.parse(JSON.stringify(data)));
@@ -244,18 +281,50 @@
             }
             
             toggleDisplay('hider-warning-text', data.role === 'hider' && data.hider_location_update_imminent === true);
+            
+            const earlyEndVoteContainer = $('#early-end-vote-container');
+            const earlyEndVoteButton = $('#request-early-end-button');
+            const earlyEndVoteInfo = $('#early-end-vote-info');
+
+            if (serverGameStatus === GAME_STATE_RUNNING && data.player_id && data.player_status === 'active') {
+                toggleDisplay(earlyEndVoteContainer.id, true);
+                earlyEndVoteButton.disabled = data.player_has_requested_early_end || !isSocketConnected;
+                earlyEndVoteButton.textContent = data.player_has_requested_early_end ? 'Abstimmung gesendet' : 'Runde vorzeitig beenden';
+                earlyEndVoteInfo.textContent = `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`;
+            } else {
+                toggleDisplay(earlyEndVoteContainer.id, false);
+            }
+
+            // Update server host/port inputs if they are part of data (from /status)
+            const serverHostInput = $('#server-host');
+            const serverPortInput = $('#server-port');
+            if (serverHostInput && data.current_server_host) serverHostInput.value = data.current_server_host;
+            if (serverPortInput && data.current_server_port) serverPortInput.value = data.current_server_port;
+
 
             if (!data.player_id && !data.player_name_pending) { 
                 show('join-section');
                 setText('join-socket-status-display', isSocketConnected ? "Verbunden" : "Nicht verbunden");
                 $('#join-socket-status-display').className = isSocketConnected ? 'status-active' : 'error';
                 setText('join-game-status-display', serverGameStatusDisplay);
+                
                 const nicknameInput = $('#nickname');
-                if (!nicknameInput.value.trim() || nicknameInput.value.startsWith("Spieler")) {
-                     nicknameInput.value = data.session_nickname || data.prefill_nickname || `Spieler${Math.floor(Math.random()*900)+100}`;
+                if (!nicknameInput.value.trim() || nicknameInput.value.startsWith("Spieler") || data.session_nickname === null) { 
+                     nicknameInput.value = data.prefill_nickname || `Spieler${Math.floor(Math.random()*900)+100}`;
+                } else if (data.session_nickname) {
+                     nicknameInput.value = data.session_nickname;
                 }
-                if (data.session_role_choice) $('#role-choice').value = data.session_role_choice;
-                $('#join-game-button').disabled = !isSocketConnected;
+
+                if (data.session_role_choice === null) { 
+                    $('#role-choice').value = "hider"; 
+                } else if (data.session_role_choice) {
+                     $('#role-choice').value = data.session_role_choice;
+                }
+                // Join button should be enabled if socket is connected OR if we allow changing server address
+                // For now, let's enable it if socket is not connected, so user can attempt to change server
+                // $('#join-game-button').disabled = !isSocketConnected;
+                $('#join-game-button').disabled = false; // Allow attempts to change server
+
             } else { 
                 show('player-section'); 
                 setText('player-name', data.player_name || data.player_name_pending || "Unbekannt");
@@ -316,7 +385,10 @@
                     toggleDisplay('game-over-leaderboard-container', data.hider_leaderboard && data.hider_leaderboard.length > 0);
                     updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
                 } else if (data.player_name_pending && !data.player_id && (serverGameStatus === 'disconnected' || !serverGameStatus) ) {
+                     // This case can happen if client.py is connected but server hasn't assigned a player_id yet
                     setText('game-status-display', data.game_state?.status_display || 'Warte auf Bestätigung vom Server...');
+                     // Ensure join section is shown if no player_id and no pending name (which implies join was attempted)
+                    if (!data.player_id) show('join-section');
                 }
             }
             if (currentPlayerData && currentPlayerData.player_id &&
@@ -377,7 +449,7 @@
             const table = $(`#${tableId}`); const tbody = table ? table.querySelector('tbody') : null;
             if (!tbody) return; tbody.innerHTML = '';
             if (leaderboardData && leaderboardData.length > 0) {
-                toggleDisplay(table.id, true);
+                toggleDisplay((table.closest('.container') || table).id, true); // Show parent container if table has content
                 leaderboardData.forEach(entry => {
                     const row = tbody.insertRow();
                     row.insertCell().textContent = entry.name; row.insertCell().textContent = entry.points;
@@ -393,7 +465,8 @@
             } else {
                  const colspan = (table.querySelector('thead tr th') || []).length || 3;
                  tbody.innerHTML = `<tr><td colspan="${colspan}" class="dimmed centered-text">Noch keine Punkte.</td></tr>`;
-                 toggleDisplay(table.id, true);
+                 // Keep leaderboard container visible even if empty to show the "Noch keine Punkte" message.
+                 toggleDisplay((table.closest('.container') || table).id, true);
             }
         }
         function updateSeekerHiderList(hiderLocations) {
@@ -432,6 +505,9 @@
         }
 
         async function sendClientAction(endpoint, bodyPayload = null) {
+            const joinButton = $('#join-game-button'); // Cache button for disabling/enabling
+            if (joinButton && endpoint === '/join_game') joinButton.disabled = true;
+
             try {
                 const options = { method: 'POST', headers: {'Content-Type': 'application/json'}};
                 if (bodyPayload) options.body = JSON.stringify(bodyPayload);
@@ -445,12 +521,19 @@
                 if (!errorData.game_state) errorData.game_state = {}; 
                 errorData.is_socket_connected_to_server = false; 
                 updateUI(errorData);
+            } finally {
+                 // Re-enable join button based on current state after updateUI
+                if (joinButton && endpoint === '/join_game') {
+                    joinButton.disabled = currentPlayerData?.is_socket_connected_to_server === false && currentPlayerData?.player_id !== null;
+                    // More robust: updateUI should handle button states based on overall game state.
+                    // For now, simple re-enable if no player_id, which means we are in join screen.
+                    if (!currentPlayerData?.player_id) joinButton.disabled = false;
+                }
             }
         }
 
         function handleLocationSuccess(position) {
             const lat = position.coords.latitude; const lon = position.coords.longitude; const accuracy = position.coords.accuracy;
-            console.log(`Browser Location: Lat ${lat.toFixed(5)}, Lon ${lon.toFixed(5)}, Acc ${accuracy.toFixed(1)}`);
             setText('player-location', `Lat: ${lat.toFixed(5)}, Lon: ${lon.toFixed(5)} (Browser)`);
             setText('player-accuracy', accuracy.toFixed(1));
             $('#mapLink a').href = `https://www.google.com/maps?q=${lat},${lon}`;
@@ -468,7 +551,6 @@
                 case error.POSITION_UNAVAILABLE: message = "Standortinformationen nicht verfügbar."; break;
                 case error.TIMEOUT: message = "Timeout bei der Standortabfrage."; break;
             }
-            console.error("Browser Location Error:", message, error);
             setText('player-location', 'Standortfehler vom Browser.'); setText('player-accuracy', 'N/A');
             toggleDisplay('mapLink', false);
             setText('location-error-message', message); toggleDisplay('location-error-message', true);
@@ -480,9 +562,8 @@
                     method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ lat: lat, lon: lon, accuracy: accuracy })
                 });
-                const result = await response.json();
-                if (response.ok && result.success) console.log("Standort an Client-Backend gesendet.");
-                else console.warn("Fehler Senden Standort an Client-Backend:", result.message);
+                if (!response.ok) console.warn("Problem bei Standortsendung an Client-Backend:", response.status);
+                // No need to call updateUI here, server will send game_update if location is processed
             } catch (error) { console.error("Netzwerkfehler Senden Standort an Client-Backend:", error); }
         }
         function startLocationUpdates() {
@@ -503,9 +584,26 @@
         }
 
         $('#join-form').addEventListener('submit', async (event) => {
-            event.preventDefault(); const nickname = $('#nickname').value; const role = $('#role-choice').value;
-            $('#join-game-button').disabled = true; 
-            await sendClientAction('/join_game', { nickname: nickname, role: role });
+            event.preventDefault();
+            const nickname = $('#nickname').value;
+            const role = $('#role-choice').value;
+            const serverHost = $('#server-host').value;
+            const serverPort = $('#server-port').value;
+
+            if (!serverHost || !serverPort) {
+                setText('join-error-message', 'Bitte Server-Host und Port angeben.');
+                toggleDisplay('join-error-message', true);
+                return;
+            }
+            saveServerDetails(serverHost, serverPort);
+
+            // Button disabling is handled by sendClientAction
+            await sendClientAction('/join_game', {
+                nickname: nickname,
+                role: role,
+                server_host: serverHost,
+                server_port: serverPort
+            });
         });
         $('#confirm-lobby-join-button')?.addEventListener('click', async () => { 
              $('#confirm-lobby-join-button').disabled = true; await sendClientAction('/confirm_lobby_join');
@@ -519,25 +617,30 @@
             event.preventDefault(); $('#complete-task-form button').disabled = true;
             await sendClientAction('/complete_task');
         });
+        $('#request-early-end-button')?.addEventListener('click', async () => {
+            $('#request-early-end-button').disabled = true;
+            await sendClientAction('/request_early_round_end_action');
+        });
         
-        async function handleGameOverReset() {
-            const gameOverButton = document.querySelector('#game-over-section button');
-            if (gameOverButton) gameOverButton.disabled = true;
+        async function handleGoToRegistration() {
+            const goToRegButton = $('#go-to-registration-button');
+            if (goToRegButton) goToRegButton.disabled = true;
 
             try {
-                const response = await fetch('/request_reset_game_on_server', { method: 'POST' });
+                const response = await fetch('/leave_game_and_go_to_join_screen', { method: 'POST' });
                 const responseData = await response.json(); 
                 updateUI(responseData); 
+                 // After UI update, if we are back on join screen, re-enable button if needed
+                if (goToRegButton && !currentPlayerData.player_id) goToRegButton.disabled = false;
             } catch (error) {
-                console.error('Fehler beim Anfordern des Spiel-Resets via /request_reset_game_on_server:', error);
+                console.error('Fehler beim Anfordern des Wechsels zum Join-Screen:', error);
                 const errorState = JSON.parse(JSON.stringify(currentPlayerData || {}));
                 if (!errorState.game_state) errorState.game_state = {};
-                errorState.game_state.status_display = "Fehler beim Zurücksetzen des Spiels.";
-                errorState.error_message = "Lokaler Client-Server nicht erreichbar für Reset-Anfrage.";
+                errorState.game_state.status_display = "Fehler beim Verlassen des Spiels.";
+                errorState.error_message = "Lokaler Client-Server nicht erreichbar.";
                 errorState.is_socket_connected_to_server = false; 
                 updateUI(errorState);
-            } finally {
-                if (gameOverButton) gameOverButton.disabled = false; 
+                if (goToRegButton) goToRegButton.disabled = false; // Re-enable on error
             }
         }
 
@@ -561,8 +664,12 @@
                 errorData.is_socket_connected_to_server = false; updateUI(errorData);
             }
         }
-        fetchStatusAndUpdateUI();
-        setInterval(fetchStatusAndUpdateUI, 2500); 
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeServerInputs(); // Load server details from localStorage when DOM is ready
+            fetchStatusAndUpdateUI(); // Initial status fetch
+            setInterval(fetchStatusAndUpdateUI, 2500); 
+        });
     </script>
 </body>
 </html>
