@@ -168,6 +168,12 @@
             color: #333; 
         }
 
+        /* NEU: Warntext Farbe für Countdown/Phasen-Info */
+        .warning-text-color {
+            color: #856404 !important; /* Bootstrap warning text color */
+            font-weight: bold;
+        }
+
         /* Sektionen-Anzeige */
         .section { display: none; } 
         .visible { display: block !important; }
@@ -244,6 +250,19 @@
             <p id="hider-warning-text" class="error" style="display:none; font-weight:bold; text-align:center;">
                 ACHTUNG HIDER! Dein Standort wird bald an die Seeker gesendet. Stelle sicher, dass die App deinen aktuellen Standort übermittelt!
             </p>
+
+            <!-- NEU: Abschnitt für Phasen-Fortschrittsbalken -->
+            <div id="phase-progress-container" style="display:none; margin-top: 15px;">
+                <h3 style="margin-bottom: 5px; font-size: 1.1em; color: #444;">Standort-Update Fortschritt</h3>
+                <div id="phase-progress-bar-wrapper" style="width: 100%; background-color: #e9ecef; border-radius: 4px; padding: 3px; box-sizing: border-box; border: 1px solid #ced4da;">
+                    <div id="phase-progress-bar" style="width: 0%; height: 22px; background-color: #28a745; border-radius: 2px; text-align: center; line-height: 22px; color: white; font-size: 0.85em; font-weight: bold; white-space: nowrap; overflow: hidden; transition: width 0.3s ease-in-out, background-color 0.3s ease-in-out;">
+                        <!-- Text wird dynamisch hier oder im p darunter gesetzt -->
+                    </div>
+                </div>
+                <p id="phase-progress-text" style="text-align: center; font-size: 0.9em; margin-top: 5px;" class="dimmed">Lade Phaseninfo...</p>
+            </div>
+            <!-- ENDE NEU -->
+
             <div id="early-end-vote-container" style="display:none;">
                  <button id="request-early-end-button" class="warning-btn">Runde vorzeitig beenden</button>
                  <p id="early-end-vote-info" class="dimmed">0/0 Spieler wollen Runde beenden.</p>
@@ -414,6 +433,16 @@
             toggleDisplay('server-management-container', false);
             const forceResetBtn = $('#force-server-reset-button'); if(forceResetBtn) { forceResetBtn.disabled = true;}
 
+            // NEU: Phase Progress Bar Reset
+            toggleDisplay('phase-progress-container', false);
+            const progressBar = $('#phase-progress-bar');
+            if(progressBar) {
+                progressBar.style.width = '0%';
+                progressBar.textContent = ''; // Text im Balken löschen
+            }
+            setText('phase-progress-text', 'Lade Phaseninfo...');
+            // ENDE NEU
+
             setHtml('lobby-player-list', '<li class="dimmed">Warte auf Spieler...</li>');
             const readyButton = $('#ready-button');
             if (readyButton) { readyButton.textContent = 'Klicken: Ich bin bereit!'; readyButton.className = 'ready'; readyButton.disabled = true; }
@@ -522,6 +551,7 @@
                 else if (data.player_status === 'caught') playerStatusText = 'Gefangen (jetzt Seeker)';
                 else if (data.player_status === 'failed_task') playerStatusText = 'Ausgeschieden (Aufgabe verfehlt)';
                 else if (data.player_status === 'failed_loc_update') playerStatusText = 'Ausgeschieden (Standort nicht aktualisiert)';
+                else statusText = `Unbekannt (${data.player_status})`;
                 setText('player-status-ingame', playerStatusText);
                 setText('game-status-display', serverGameStatusDisplay);
                 updateHiderStatusMessages(data.player_status);
@@ -571,6 +601,10 @@
             if (data.player_id && (serverGameStatus === GAME_STATE_LOBBY || serverGameStatus === GAME_STATE_HIDER_WAIT || serverGameStatus === GAME_STATE_RUNNING)) {
                 startLocationUpdates();
             } else { stopLocationUpdates(); }
+
+            // NEU: Update des Phasen-Fortschrittsbalkens
+            updatePhaseProgressBar(data.phase_info, data.game_state, data.role);
+            // ENDE NEU
         }
 
         function updateLobbyPlayerList(lobbyPlayers, currentPlayerIdStr) {
@@ -681,6 +715,125 @@
         }
 
         // updateSeekerPowerups function wurde entfernt
+
+        // NEU: Funktion zur Aktualisierung des Phasen-Fortschrittsbalkens
+        function updatePhaseProgressBar(phaseInfo, gameState, playerRole) {
+            const container = $('#phase-progress-container');
+            const bar = $('#phase-progress-bar');
+            const textElement = $('#phase-progress-text'); // Das <p>-Element unter dem Balken
+
+            if (!container || !bar || !textElement) return;
+
+            // Bedingungen, wann der Balken angezeigt wird:
+            // 1. Hider-Vorbereitungszeit (für alle sichtbar, zeigt Countdown bis Spielstart)
+            // 2. Spiel läuft UND der Spieler ist ein Seeker (zeigt Fortschritt zum nächsten Hider-Standort-Update)
+            const showForHiderWait = gameState && gameState.status === GAME_STATE_HIDER_WAIT;
+            const showForSeekerRunning = gameState && gameState.status === GAME_STATE_RUNNING && playerRole === 'seeker';
+
+            if (!phaseInfo || !(showForHiderWait || showForSeekerRunning)) {
+                toggleDisplay(container.id, false);
+                return;
+            }
+            toggleDisplay(container.id, true);
+
+            const now = Date.now(); // Aktuelle Client-Zeit in Millisekunden
+            let progressPercent = 0;
+            let progressText = "Phaseninformationen werden verarbeitet...";
+            let barText = ""; // Text direkt im Balken
+
+            if (showForHiderWait) {
+                const totalWaitTime = phaseInfo.hider_departure_config_seconds;
+                const timeLeft = gameState.hider_wait_time_left; // Kommt vom Server
+                const elapsed = totalWaitTime - timeLeft;
+                
+                progressPercent = totalWaitTime > 0 ? Math.max(0, Math.min(100, (elapsed / totalWaitTime) * 100)) : 0;
+                progressText = `Vorbereitung: Hider verstecken sich. Spielstart in ca. ${timeLeft} Sek.`;
+                barText = `${Math.round(progressPercent)}%`;
+                bar.style.backgroundColor = '#ffc107'; // Gelb für Wartezeit/Vorbereitung
+                textElement.className = 'dimmed';
+                if (timeLeft <= 30) textElement.classList.add('warning-text-color'); else textElement.classList.remove('warning-text-color');
+
+
+            } else if (showForSeekerRunning) {
+                bar.style.backgroundColor = '#28a745'; // Grün für laufendes Spiel (Standard)
+                textElement.className = 'dimmed';
+
+                const currentServerPhaseDetails = phaseInfo.current_details; // Details zur Phase, die der Server als aktiv betrachtet
+                const nextBroadcastTimeMs = phaseInfo.next_broadcast_time_epoch_ms; // Absoluter Timestamp des nächsten Broadcasts
+
+                if (!nextBroadcastTimeMs) { // null oder undefined
+                    progressText = "Keine weiteren Standort-Updates für Hider geplant.";
+                    progressPercent = 100; // Balken voll, da keine Updates mehr ausstehen
+                    barText = "Updates abgeschlossen";
+                    bar.style.backgroundColor = '#6c757d'; // Grau
+                } else {
+                    const timeToNextBroadcastMs = nextBroadcastTimeMs - now;
+                    const phaseName = currentServerPhaseDetails ? (currentServerPhaseDetails.name || `Phase ${currentServerPhaseDetails.index}`) : "N/A";
+
+                    if (timeToNextBroadcastMs <= 0) {
+                        // Das nächste Update ist fällig oder ist gerade passiert
+                        progressPercent = 100;
+                        progressText = `${phaseName}: Standort-Daten werden an Seeker verteilt...`;
+                        barText = "Sende...";
+                        bar.style.backgroundColor = '#17a2b8'; // Info-Blau während des "Sendens"
+                    } else {
+                        // Es gibt ein geplantes nächstes Update
+                        let intervalDurationTotalMs = 0; // Die Dauer des aktuellen Update-Zyklus/Segments
+
+                        if (currentServerPhaseDetails) {
+                            const phaseConfig = phaseInfo.definitions[currentServerPhaseDetails.index];
+                            if (phaseConfig) {
+                                if (phaseConfig.is_initial_reveal) {
+                                     // Der "Initial Reveal" passiert sofort nach HIDER_WAIT.
+                                     // nextBroadcastTimeMs ist der Zeitpunkt dieses Reveals.
+                                     // currentServerPhaseDetails.start_time_epoch_ms ist der Beginn der RUNNING Phase.
+                                     // Diese sollten fast identisch sein.
+                                    intervalDurationTotalMs = nextBroadcastTimeMs - (phaseInfo.game_start_time_actual_epoch_ms || currentServerPhaseDetails.start_time_epoch_ms);
+                                    // Wenn der Initial Reveal der nächste ist, ist dies das "Intervall"
+                                    if (intervalDurationTotalMs <=0) intervalDurationTotalMs = 1000; // Mindestdauer für Anzeige
+                                } else if (phaseConfig.update_interval_seconds) {
+                                    intervalDurationTotalMs = phaseConfig.update_interval_seconds * 1000;
+                                } else if (phaseConfig.updates_in_phase > 0 && phaseConfig.duration_seconds > 0) {
+                                    intervalDurationTotalMs = (phaseConfig.duration_seconds / phaseConfig.updates_in_phase) * 1000;
+                                }
+                            }
+                        }
+                        
+                        if (intervalDurationTotalMs > 0) {
+                            const timeElapsedInCurrentIntervalMs = intervalDurationTotalMs - timeToNextBroadcastMs;
+                            progressPercent = Math.max(0, Math.min(100, (timeElapsedInCurrentIntervalMs / intervalDurationTotalMs) * 100));
+                            
+                            progressText = `${phaseName}: Nächstes Hider-Standort-Update in ca. ${Math.ceil(timeToNextBroadcastMs / 1000)} Sek.`;
+                            barText = `${Math.round(progressPercent)}%`;
+
+                            if (currentServerPhaseDetails && !currentServerPhaseDetails.is_initial_reveal) {
+                                if (currentServerPhaseDetails.updates_in_phase) {
+                                     progressText += ` (Update ${currentServerPhaseDetails.updates_done_this_phase + 1}/${currentServerPhaseDetails.updates_in_phase})`;
+                                } else if (currentServerPhaseDetails.update_interval_seconds) {
+                                     progressText += ` (Intervall: ${currentServerPhaseDetails.update_interval_seconds}s)`;
+                                }
+                            }
+                            if (timeToNextBroadcastMs < 20000) { // Weniger als 20 Sekunden
+                                bar.style.backgroundColor = '#fd7e14'; // Orange als Warnung
+                                textElement.classList.add('warning-text-color');
+                            } else {
+                                textElement.classList.remove('warning-text-color');
+                            }
+                        } else {
+                            // Fallback, falls Intervall nicht bestimmbar, aber ein nächstes Update existiert
+                            progressText = `Nächstes Hider-Standort-Update in ca. ${Math.ceil(timeToNextBroadcastMs / 1000)} Sek. (Details nicht verfügbar).`;
+                            barText = "Warte...";
+                            progressPercent = 0; // Oder einen Schätzwert
+                        }
+                    }
+                }
+            }
+
+            bar.style.width = progressPercent + '%';
+            bar.textContent = barText; // Text direkt im Balken anzeigen
+            textElement.textContent = progressText;
+        }
+        // ENDE NEU
 
         async function sendClientAction(endpoint, bodyPayload = null, triggeringButton = null) {
             if (triggeringButton) triggeringButton.disabled = true;
