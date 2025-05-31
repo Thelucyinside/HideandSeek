@@ -42,11 +42,48 @@ INITIAL_TASK_SKIPS = 1 # Anzahl der Aufgaben-Skips, die ein Hider pro Spiel erh�
 game_data = {} # Globales Dictionary, das den aktuellen Spielzustand speichert
 data_lock = threading.RLock() # Reentrant Lock für den Zugriff auf game_data, um Race Conditions zu vermeiden
 
-def reset_game_to_initial_state():
+def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message="Server wurde zurückgesetzt. Bitte neu beitreten."):
     """ Setzt das Spiel komplett zurück, entfernt alle Spieler und startet eine frische Lobby. """
     global game_data
     with data_lock:
-        print("SERVER LOGIC: Spiel wird komplett auf Anfangszustand zurückgesetzt.")
+        print(f"SERVER LOGIC: Spiel wird zurückgesetzt. Notify Clients: {notify_clients_about_reset}")
+        
+        if notify_clients_about_reset:
+            # Spieler benachrichtigen und ihre Verbindungen serverseitig vorbereiten/schließen
+            players_to_disconnect_info = []
+            # Kopie der Spieler erstellen, um Änderungen während der Iteration zu vermeiden
+            current_players_copy = list(game_data.get("players", {}).items()) 
+            
+            for p_id, p_info in current_players_copy:
+                conn_to_notify = p_info.get("client_conn")
+                if conn_to_notify:
+                    players_to_disconnect_info.append({
+                        "id": p_id, 
+                        "conn": conn_to_notify, 
+                        "name": p_info.get("name", "N/A")
+                    })
+                    try:
+                        payload = {
+                            "type": "game_update", # Wird vom Client als game_update mit player_id: null behandelt
+                            "player_id": None, 
+                            "error_message": reset_message,
+                            "join_error": reset_message, # Damit der Join-Screen den Fehler anzeigt
+                            "game_state": { "status": "disconnected", "status_display": reset_message, "game_over_message": reset_message }
+                        }
+                        conn_to_notify.sendall(json.dumps(payload).encode('utf-8') + b'\n')
+                        print(f"SERVER RESET NOTIFY: An P:{p_id} ({p_info.get('name', 'N/A')}) gesendet.")
+                    except Exception as e:
+                        print(f"SERVER RESET NOTIFY (ERROR) P:{p_id}: {e}")
+            
+            # Schließe die Verbindungen NACHDEM alle Benachrichtigungen gesendet wurden (Versuch)
+            # Dies ist wichtig, damit die Nachrichten auch ankommen können.
+            for player_info_dc in players_to_disconnect_info:
+                try:
+                    player_info_dc["conn"].close()
+                    print(f"SERVER RESET: Socket für P:{player_info_dc['id']} ({player_info_dc['name']}) explizit geschlossen.")
+                except Exception: pass # Ignoriere Fehler beim Schließen, könnte schon zu sein
+                # Die client_conn Einträge werden durch game_data.clear() sowieso entfernt.
+
         game_data.clear() # Leert alle vorhandenen Spieldaten
         game_data.update({ # Setzt die initialen Spieldaten
             "status": GAME_STATE_LOBBY,
@@ -63,6 +100,8 @@ def reset_game_to_initial_state():
             "early_end_requests": set(), # Set von Spieler-IDs, die ein frühes Rundenende beantragt haben
             "total_active_players_for_early_end": 0 # Gesamtzahl der aktiven Spieler für die Abstimmung
         })
+        print("SERVER LOGIC: Spielzustand auf Initialwerte zurückgesetzt.")
+
 
 def get_active_lobby_players_data():
     """ Sammelt Daten aller Spieler, die sich in der Lobby befinden und die Lobby bestätigt haben. """
@@ -125,6 +164,8 @@ def assign_task_to_hider(player_id):
 def count_active_players_for_early_end():
     """ Zählt die Anzahl der aktiven Spieler, die für eine Abstimmung zum frühen Rundenende relevant sind. """
     with data_lock:
+        # Spieler gelten als aktiv für die Abstimmung, wenn sie in der Lobby bestätigt sind und ihr Ingame-Status "active" ist.
+        # Dies schließt Spieler in GAME_STATE_HIDER_WAIT und GAME_STATE_RUNNING ein.
         return sum(1 for p_info in game_data.get("players", {}).values()
                    if p_info.get("status_ingame") == "active" and p_info.get("confirmed_for_lobby"))
 
@@ -137,7 +178,7 @@ def send_data_to_one_client(conn, player_id_for_perspective):
             # Überprüfen, ob die player_id im game_data existiert. Falls nicht, Client informieren.
             if "players" not in game_data or player_id_for_perspective not in game_data["players"]:
                 if conn: # Wenn Verbindung noch existiert
-                    null_player_payload = {"type": "game_update", "player_id": None, "message": "Player removed from game."}
+                    null_player_payload = {"type": "game_update", "player_id": None, "message": "Du wurdest aus dem Spiel entfernt oder der Server wurde zurückgesetzt."}
                     try:
                         conn.sendall(json.dumps(null_player_payload).encode('utf-8') + b'\n')
                         print(f"SERVER SEND: An P:{player_id_for_perspective} gesendet, dass er nicht mehr im Spiel ist (player_id: None).")
@@ -350,10 +391,10 @@ def handle_client_connection(conn, addr):
 
                         # Aktion: Spieler tritt dem Spiel bei (nur wenn noch keine ID zugewiesen)
                         if action == "JOIN_GAME" and player_id is None:
-                            # Wenn Spiel bereits beendet war, setze es zurück
+                            # Wenn Spiel bereits beendet war, setze es zurück (ohne Client-Benachrichtigung, da neuer Join)
                             if current_game_status_in_handler in [GAME_STATE_HIDER_WINS, GAME_STATE_SEEKER_WINS]:
-                                print("SERVER: JOIN_GAME erhalten, Spiel war beendet. Resette Spiel komplett.")
-                                reset_game_to_initial_state() 
+                                print("SERVER: JOIN_GAME erhalten, Spiel war beendet. Resette Spiel (ohne Client-Notiz).")
+                                reset_game_to_initial_state(notify_clients_about_reset=False) 
                                 current_game_status_in_handler = game_data.get("status") # Status nach Reset aktualisieren
                             
                             # Wenn das Spiel nicht in der Lobby ist, ablehnen
@@ -382,12 +423,39 @@ def handle_client_connection(conn, addr):
                                 "power_ups_used_time": {}, "has_pending_location_warning": False,
                                 "last_location_update_after_warning": 0, "warning_sent_time": 0, "last_location_timestamp": 0,
                                 "task": None, "task_deadline": None,
-                                "task_skips_available": INITIAL_TASK_SKIPS if p_role == "hider" else 0 # NEU: Skips zuweisen
+                                "task_skips_available": INITIAL_TASK_SKIPS if p_role == "hider" else 0 # Skips zuweisen
                             }
                             print(f"SERVER JOIN-PLAYER-CREATED: {p_name} ({player_id}) von {addr}.")
                             send_data_to_one_client(conn, player_id) # Ersten Status an den neuen Client senden
                             broadcast_full_game_state_to_all(exclude_pid=player_id) # Andere Clients über neuen Spieler informieren
                             continue
+                        
+                        # NEUE AKTION: Server-Reset durch Client erzwingen
+                        elif action == "FORCE_SERVER_RESET_FROM_CLIENT":
+                            # Diese Aktion kann auch von einem Client ohne player_id (Join-Screen) gesendet werden,
+                            # wenn die client.py Route es erlaubt (requires_player_id=False).
+                            client_name_for_reset_log = player_name_for_log if player_id else f"Client {addr[0]}:{addr[1]}"
+                            print(f"SERVER: {client_name_for_reset_log} hat Server-Reset (FORCE_SERVER_RESET_FROM_CLIENT) angefordert.")
+                            
+                            reset_message_for_clients = f"Server wurde von '{client_name_for_reset_log}' zurückgesetzt. Bitte neu beitreten."
+                            reset_game_to_initial_state(notify_clients_about_reset=True, reset_message=reset_message_for_clients)
+                            
+                            # Bestätigung an den auslösenden Client (falls Verbindung noch besteht)
+                            try:
+                                # Auch wenn der Client keine player_id hatte, kann er diese Bestätigung empfangen.
+                                ack_payload = {
+                                    "type": "acknowledgement", 
+                                    "message": "Server wurde erfolgreich zurückgesetzt. Du kannst dich jetzt neu anmelden."
+                                    # Der Client-UI wird den player_id=None Teil des Game-Updates verarbeiten.
+                                }
+                                conn.sendall(json.dumps(ack_payload).encode('utf-8') + b'\n')
+                            except Exception as e:
+                                print(f"SERVER RESET (ERROR - ACK): Konnte Reset-Bestätigung nicht an {client_name_for_reset_log} senden: {e}")
+                            
+                            # Die Verbindung dieses Client-Handlers wird durch reset_game_to_initial_state() bereits geschlossen.
+                            # Es ist wichtig, diesen Handler-Thread zu beenden.
+                            print(f"SERVER: Client-Handler für {client_name_for_reset_log} wird nach Server-Reset beendet.")
+                            return # Beendet diesen Client-Handler-Thread.
 
                         # Prüfen, ob der Spieler authentifiziert ist für weitere Aktionen
                         if not player_id or player_id not in game_data.get("players", {}):
@@ -454,7 +522,6 @@ def handle_client_connection(conn, addr):
                                 broadcast_full_game_state_to_all()
                             else: send_data_to_one_client(conn, player_id)
 
-                        # NEUE AKTION: Aufgabe überspringen
                         elif action == "SKIP_TASK": 
                             task_skipped_successfully = False
                             error_message_to_client = None
@@ -490,7 +557,6 @@ def handle_client_connection(conn, addr):
                                 if check_game_conditions_and_end(): pass 
                                 broadcast_full_game_state_to_all()
                         
-                        # Aktion: Hider fangen
                         elif action == "CATCH_HIDER": 
                             hider_id_to_catch = message.get("hider_id_to_catch"); caught = False
                             if current_player_data["current_role"] == "seeker" and hider_id_to_catch in game_data.get("players", {}):
@@ -506,7 +572,6 @@ def handle_client_connection(conn, addr):
                                 broadcast_full_game_state_to_all()
                             else: send_data_to_one_client(conn, player_id)
                         
-                        # Aktion: Power-Up verwenden
                         elif action == "USE_POWERUP": 
                             powerup_id_to_use = message.get("powerup_id"); powerup_used_successfully = False
                             if current_player_data["current_role"] == "seeker" and powerup_id_to_use in POWER_UPS:
@@ -519,13 +584,12 @@ def handle_client_connection(conn, addr):
                             if powerup_used_successfully: broadcast_full_game_state_to_all()
                             else: send_data_to_one_client(conn, player_id)
                         
-                        # Aktion: Spiel verlassen und zum Join-Screen zurückkehren
                         elif action == "LEAVE_GAME_AND_GO_TO_JOIN":
                             print(f"SERVER: Spieler {player_name_for_log} ({player_id}) verlässt Spiel (LEAVE_GAME_AND_GO_TO_JOIN).")
-                            if player_id in game_data["players"]: 
-                                del game_data["players"][player_id] # Spieler aus game_data entfernen
+                            if player_id in game_data.get("players", {}): # Sicherstellen, dass der Spieler existiert bevor er gelöscht wird
+                                del game_data["players"][player_id] 
                             
-                            player_id_that_left = player_id # Temporär die ID speichern
+                            player_id_that_left = player_id 
                             player_id = None # Spieler-ID für diese Verbindung auf None setzen (nicht mehr authentifiziert)
                             
                             try:
@@ -537,16 +601,15 @@ def handle_client_connection(conn, addr):
                             print(f"SERVER: Verbindung für P:{player_id_that_left} (Name: {player_name_for_log}) wird nach LEAVE_GAME geschlossen.")
                             return # Beendet den Handler-Thread für diese Verbindung
 
-                        # Aktion: Frühes Rundenende beantragen
                         elif action == "REQUEST_EARLY_ROUND_END":
-                            # Nur wenn Spiel läuft, Spieler aktiv ist und Lobby bestätigt hat
-                            if current_game_status_in_handler == GAME_STATE_RUNNING and \
+                            # Erlaube Abstimmung auch in der Hider-Wartezeit
+                            if current_game_status_in_handler in [GAME_STATE_RUNNING, GAME_STATE_HIDER_WAIT] and \
                                current_player_data.get("status_ingame") == "active" and \
                                current_player_data.get("confirmed_for_lobby"):
                                 
                                 game_data.setdefault("early_end_requests", set()).add(player_id) # Request hinzufügen
                                 game_data["total_active_players_for_early_end"] = count_active_players_for_early_end() # Aktive Spieler neu zählen
-                                print(f"SERVER: Spieler {player_name_for_log} ({player_id}) beantragt frühes Rundenende. Stand: {len(game_data['early_end_requests'])}/{game_data['total_active_players_for_early_end']}")
+                                print(f"SERVER: Spieler {player_name_for_log} ({player_id}) beantragt frühes Rundenende. Status: {current_game_status_in_handler}. Stand: {len(game_data['early_end_requests'])}/{game_data['total_active_players_for_early_end']}")
                                 
                                 # Wenn genügend Spieler (alle aktiven) zugestimmt haben
                                 if game_data["total_active_players_for_early_end"] > 0 and \
@@ -554,9 +617,9 @@ def handle_client_connection(conn, addr):
                                     print("SERVER: Konsens für frühes Rundenende erreicht!")
                                     game_data["status"] = GAME_STATE_SEEKER_WINS # Seeker gewinnen bei frühem Ende (Standard)
                                     game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_SEEKER_WINS]
-                                    game_data["game_over_message"] = "Spiel durch Konsens der Spieler vorzeitig beendet. Seeker gewinnen!"
+                                    game_data["game_over_message"] = f"Spiel durch Konsens der Spieler vorzeitig beendet (während {GAME_STATE_DISPLAY_NAMES.get(current_game_status_in_handler, current_game_status_in_handler)}). Seeker gewinnen!"
                                     game_data["early_end_requests"].clear() 
-                                    if check_game_conditions_and_end(): pass # Erneuter Check, falls Kaskaden-Effekt
+                                    # Kein check_game_conditions_and_end nötig, da wir Status direkt setzen und broadcasten
                                 
                                 broadcast_full_game_state_to_all()
                             else:
@@ -576,23 +639,26 @@ def handle_client_connection(conn, addr):
         print(f"SERVER CLEANUP ({addr[1]}): P:{player_id}, Name: {player_name_for_log}. Verbindung wird geschlossen.")
         player_affected_by_disconnect = False
         with data_lock:
-            # Nur client_conn auf None setzen, wenn diese Verbindung die aktuelle war
-            if player_id and player_id in game_data.get("players", {}):
+            # Nur client_conn auf None setzen, wenn diese Verbindung die aktuelle war.
+            # Nach einem Server-Reset (FORCE_SERVER_RESET_FROM_CLIENT) ist game_data["players"] leer,
+            # daher wird dieser Block nicht ausgeführt, was korrekt ist.
+            if player_id and player_id in game_data.get("players", {}): # Check if player_id is still valid
                 if game_data["players"][player_id].get("client_conn") is conn:
                     game_data["players"][player_id]["client_conn"] = None
                     player_affected_by_disconnect = True
                     print(f"SERVER: Spieler {player_name_for_log} ({player_id}) client_conn auf None gesetzt (Socket {conn.fileno() if conn else 'N/A'}).")
                 else:
                     print(f"SERVER: Spieler {player_name_for_log} ({player_id}) hatte bereits eine andere/keine client_conn.")
-            elif not player_id: # Falls Spieler-ID bereits None ist (z.B. nach LEAVE_GAME)
-                 print(f"SERVER: Spieler {player_name_for_log} (ehemals ID, jetzt None) hatte die Verbindung aktiv beendet oder wurde entfernt.")
+            elif not player_id: # Falls Spieler-ID bereits None ist (z.B. nach LEAVE_GAME oder wenn nie zugewiesen)
+                 print(f"SERVER: Spieler {player_name_for_log} (ehemals ID oder nie zugewiesen) hatte die Verbindung aktiv beendet oder wurde entfernt.")
 
         if player_affected_by_disconnect:
-            # Wenn ein relevanter Spieler die Verbindung verliert, Spielende prüfen und broadcasten
-            if game_data.get("status") == GAME_STATE_RUNNING:
-                if check_game_conditions_and_end():
-                    print(f"SERVER: Spiel beendet nach Client-Disconnect/Cleanup von {player_name_for_log}.")
-            broadcast_full_game_state_to_all() # Zustand an alle anderen senden
+            # Nur wenn der Server nicht gerade resettet wurde (game_data["players"] wäre dann leer)
+            if game_data.get("players"): 
+                if game_data.get("status") == GAME_STATE_RUNNING:
+                    if check_game_conditions_and_end():
+                        print(f"SERVER: Spiel beendet nach Client-Disconnect/Cleanup von {player_name_for_log}.")
+                broadcast_full_game_state_to_all() # Zustand an alle anderen senden
 
         if conn: # Verbindung wirklich schließen
             try: conn.close()
@@ -618,7 +684,8 @@ def game_logic_thread():
             if previous_game_status_for_logic != current_game_status:
                 broadcast_needed_due_to_time_or_state_change = True
                 previous_game_status_for_logic = current_game_status
-                if current_game_status == GAME_STATE_RUNNING: 
+                # Reset early end vote counts when game state changes to a state where voting is possible
+                if current_game_status in [GAME_STATE_RUNNING, GAME_STATE_HIDER_WAIT]:
                     game_data["early_end_requests"] = set() # Abstimmungen zurücksetzen
                     game_data["total_active_players_for_early_end"] = count_active_players_for_early_end()
 
@@ -642,6 +709,7 @@ def game_logic_thread():
                     game_data["status"] = GAME_STATE_HIDER_WAIT # Übergang zum Hider-Wartezustand
                     game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_HIDER_WAIT]
                     game_data["hider_wait_end_time"] = current_time + HIDER_START_DELAY_SECONDS # Wartezeit setzen
+                    # Votes für HIDER_WAIT werden beim Statuswechsel oben bereits initialisiert
                     broadcast_needed_due_to_time_or_state_change = True
 
 
@@ -655,8 +723,7 @@ def game_logic_thread():
                         game_data["game_start_time_actual"] = current_time # Aktuelle Startzeit
                         game_data["game_end_time"] = current_time + GAME_DURATION_SECONDS # Geplante Endzeit
                         game_data["next_seeker_hider_location_broadcast_time"] = current_time + game_data["current_hider_location_update_interval"] # Erster Standort-Broadcast
-                        game_data["early_end_requests"].clear() 
-                        game_data["total_active_players_for_early_end"] = count_active_players_for_early_end()
+                        # Votes für RUNNING werden beim Statuswechsel oben bereits initialisiert
                         
                         # Allen aktiven Hidern eine erste Aufgabe zuweisen
                         for p_id_task, p_info_task in game_data.get("players", {}).items():
@@ -675,6 +742,11 @@ def game_logic_thread():
                     # Countdown für die Wartezeit anzeigen
                     elif int(game_data["hider_wait_end_time"] - current_time) % 3 == 0: 
                         broadcast_needed_due_to_time_or_state_change = True
+                
+                # Hier könnten wir auch check_game_conditions_and_end() aufrufen, wenn das Spiel in HIDER_WAIT
+                # durch Abstimmung beendet werden kann. Aber da die Abstimmung den Status direkt auf *_WINS setzt,
+                # ist es nicht unbedingt nötig, es hier zu prüfen. Die Hauptlogik ist im Action-Handler.
+                # Wenn eine Abstimmung erfolgreich war, wird der Status geändert und der Broadcast ausgelöst.
 
             # Logik für den laufenden Spielstatus
             elif current_game_status == GAME_STATE_RUNNING:
@@ -761,7 +833,7 @@ def game_logic_thread():
 
             # Logik für den Spielende-Status
             elif current_game_status in [GAME_STATE_HIDER_WINS, GAME_STATE_SEEKER_WINS]:
-                if game_data.get("game_end_time"): 
+                if game_data.get("game_end_time"): # game_end_time könnte durch frühes Ende nicht gesetzt sein
                     time_since_game_end = current_time - game_data.get("game_end_time", current_time)
                     # Häufigere Updates direkt nach Spielende, dann seltener
                     if time_since_game_end < 30 and int(current_time) % 5 == 0: 
@@ -777,7 +849,10 @@ def game_logic_thread():
             if game_ended_this_tick: 
                  print(f"LOGIC: Spiel beendet durch check_game_conditions_and_end. Finaler Status: {game_data.get('status_display', 'N/A')}.")
             elif broadcast_needed_due_to_time_or_state_change: 
-                 print(f"LOGIC: Broadcast ausgelöst. Aktueller Status: {game_data.get('status_display', 'N/A')}. Zeit bis Spielende: {int(game_data.get('game_end_time', 0) - time.time()) if game_data.get('game_end_time') else 'N/A'}s")
+                 gsd = game_data.get('status_display', 'N/A')
+                 gtl_raw = game_data.get('game_end_time', 0)
+                 gtl_str = f"{int(gtl_raw - current_time)}s" if gtl_raw else 'N/A'
+                 print(f"LOGIC: Broadcast ausgelöst. Aktueller Status: {gsd}. Zeit bis Spielende: {gtl_str}")
             broadcast_full_game_state_to_all() # Sendet aktualisierten Zustand an alle Clients
 
 def main_server():
