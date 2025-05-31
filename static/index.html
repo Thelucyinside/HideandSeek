@@ -4,49 +4,183 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Hide and Seek JS Client</title>
+    <!-- PWA Manifest und Theme-Farbe für App-Erfahrung -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#007bff">
 
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 10px; background-color: #f4f4f8; color: #333; font-size: 16px; line-height: 1.5; }
-        .container { background-color: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 15px; }
-        h1, h2, h3 { color: #333; margin-top: 0; }
-        h1 { font-size: 1.8em; } h2 { font-size: 1.5em; } h3 { font-size: 1.2em; }
-        .info { margin-bottom: 8px; padding: 8px 0; border-bottom: 1px solid #eee; }
+        /* Allgemeine Stile für Body und Container */
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            margin: 0; 
+            padding: 10px; 
+            background-color: #f4f4f8; 
+            color: #333; 
+            font-size: 16px; 
+            line-height: 1.5; 
+        }
+        .container { 
+            background-color: white; 
+            padding: 15px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            margin-bottom: 15px; 
+        }
+        h1, h2, h3 { 
+            color: #333; 
+            margin-top: 0; 
+        }
+        h1 { font-size: 1.8em; } 
+        h2 { font-size: 1.5em; } 
+        h3 { font-size: 1.2em; }
+        .info { 
+            margin-bottom: 8px; 
+            padding: 8px 0; 
+            border-bottom: 1px solid #eee; 
+        }
         .info:last-child { border-bottom: none; }
         .info strong { color: #555; }
-        .player-list { list-style: none; padding-left: 0; }
-        .player-list li { padding: 8px; border-bottom: 1px solid #f0f0f0; }
+
+        /* Listen-Stile */
+        .player-list { 
+            list-style: none; 
+            padding-left: 0; 
+        }
+        .player-list li { 
+            padding: 8px; 
+            border-bottom: 1px solid #f0f0f0; 
+        }
         .player-list li:last-child { border-bottom: none; }
-        .error { color: #d9534f; background-color: #f2dede; border: 1px solid #ebccd1; padding: 10px; border-radius: 4px; margin-top:10px;}
-        .success { color: #5cb85c; background-color: #dff0d8; border: 1px solid #d6e9c6; padding: 10px; border-radius: 4px; margin-top:10px;}
-        .highlight { background-color: #e6f7ff; font-weight: bold; }
-        button, input[type="submit"] { display: block; width: 100%; padding: 12px 15px; margin: 10px 0; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1em; transition: background-color 0.2s ease; }
+        .highlight { 
+            background-color: #e6f7ff; 
+            font-weight: bold; 
+        }
+
+        /* Nachrichten-Stile (Fehler, Erfolg) */
+        .error { 
+            color: #d9534f; 
+            background-color: #f2dede; 
+            border: 1px solid #ebccd1; 
+            padding: 10px; 
+            border-radius: 4px; 
+            margin-top:10px;
+        }
+        .success { 
+            color: #5cb85c; 
+            background-color: #dff0d8; 
+            border: 1px solid #d6e9c6; 
+            padding: 10px; 
+            border-radius: 4px; 
+            margin-top:10px;
+        }
+        #messages-section p { margin: 5px 0;}
+
+        /* Button- und Input-Stile */
+        button, input[type="submit"] { 
+            display: block; 
+            width: 100%; 
+            padding: 12px 15px; 
+            margin: 10px 0; 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-size: 1em; 
+            transition: background-color 0.2s ease; 
+        }
         button:hover, input[type="submit"]:hover { background-color: #0056b3; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        button.ready { background-color: #28a745; } button.ready:hover { background-color: #1e7e34; }
-        button.unready { background-color: #ffc107; color: #333; } button.unready:hover { background-color: #d39e00; }
-        button.action-btn { background-color: #17a2b8; margin-top: 5px; font-size: 0.9em; padding: 8px 10px;}
+        button:disabled { 
+            background-color: #ccc; 
+            cursor: not-allowed; 
+        }
+        button.ready { background-color: #28a745; } 
+        button.ready:hover { background-color: #1e7e34; }
+        button.unready { background-color: #ffc107; color: #333; } 
+        button.unready:hover { background-color: #d39e00; }
+        button.action-btn { 
+            background-color: #17a2b8; 
+            margin-top: 5px; 
+            font-size: 0.9em; 
+            padding: 8px 10px;
+        }
         button.action-btn:hover { background-color: #117a8b; }
-        button.warning-btn { background-color: #ffc107; color: #212529; }
+        button.warning-btn { 
+            background-color: #ffc107; 
+            color: #212529; 
+        }
         button.warning-btn:hover { background-color: #e0a800; }
-        input[type="text"], input[type="number"], select { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em;}
-        label { display: block; margin-bottom: 5px; font-weight: bold; color: #555;}
-        #mapLink a { color: #007bff; text-decoration: none; font-weight: normal; }
-        .countdown { font-size: 1.8em; font-weight: bold; color: #dc3545; text-align: center; padding:10px; background-color: #fff3cd; border-radius: 5px; margin: 10px 0;}
-        .status-active { color: green; font-weight: bold; } .status-caught { color: orange; font-weight: bold; } .status-failed, .status-failed-loc { color: red; font-weight: bold; } 
-        .leaderboard { width: 100%; border-collapse: collapse; margin-top:10px; }
-        .leaderboard th, .leaderboard td { text-align: left; padding: 10px; border-bottom: 1px solid #ddd;}
-        .leaderboard th { background-color: #f8f9fa; color: #333; }
-        .section { display: none; } .visible { display: block !important; }
+        input[type="text"], input[type="number"], select { 
+            width: calc(100% - 22px); 
+            padding: 10px; 
+            margin-bottom: 10px; 
+            border: 1px solid #ccc; 
+            border-radius: 4px; 
+            box-sizing: border-box; 
+            font-size: 1em;
+        }
+        label { 
+            display: block; 
+            margin-bottom: 5px; 
+            font-weight: bold; 
+            color: #555;
+        }
+        #mapLink a { 
+            color: #007bff; 
+            text-decoration: none; 
+            font-weight: normal; 
+        }
+
+        /* Countdown und Statusanzeigen */
+        .countdown { 
+            font-size: 1.8em; 
+            font-weight: bold; 
+            color: #dc3545; 
+            text-align: center; 
+            padding:10px; 
+            background-color: #fff3cd; 
+            border-radius: 5px; 
+            margin: 10px 0;
+        }
+        .status-active { color: green; font-weight: bold; } 
+        .status-caught { color: orange; font-weight: bold; } 
+        .status-failed, .status-failed-loc { color: red; font-weight: bold; } 
+
+        /* Leaderboard */
+        .leaderboard { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top:10px; 
+        }
+        .leaderboard th, .leaderboard td { 
+            text-align: left; 
+            padding: 10px; 
+            border-bottom: 1px solid #ddd;
+        }
+        .leaderboard th { 
+            background-color: #f8f9fa; 
+            color: #333; 
+        }
+
+        /* Sektionen-Anzeige */
+        .section { display: none; } 
+        .visible { display: block !important; }
+
+        /* Hilfsstile */
         .centered-text { text-align: center; }
         .dimmed { color: #777; }
-        #messages-section p { margin: 5px 0;}
-        #early-end-vote-info { margin-top: 15px; padding: 10px; background-color: #e9ecef; border-radius: 5px; text-align: center;}
+        #early-end-vote-info { 
+            margin-top: 15px; 
+            padding: 10px; 
+            background-color: #e9ecef; 
+            border-radius: 5px; 
+            text-align: center;
+        }
     </style>
 </head>
 <body>
     <div id="app-container">
+        <!-- Abschnitt: Spiel beitreten -->
         <div id="join-section" class="container section">
             <h1>Spiel beitreten</h1>
             <p class="info">Server Verbindung: <span id="join-socket-status-display" class="dimmed">Prüfe...</span></p>
@@ -69,6 +203,7 @@
             <p id="join-error-message" class="error" style="display:none;"></p>
         </div>
 
+        <!-- Abschnitt: Ausstehender Lobby-Beitritt (nach erfolgreicher Registrierung am Server) -->
         <div id="pending-lobby-join-section" class="container section">
             <h2>Registrierung zum Server erfolgreich!</h2>
             <p>Du bist beim Spielserver als <strong id="pending-lobby-player-name"></strong> (<span id="pending-lobby-player-role-wish"></span>) angemeldet.</p>
@@ -78,6 +213,7 @@
             <button id="confirm-lobby-join-button">Der Lobby beitreten</button>
         </div>
 
+        <!-- Abschnitt: Haupt-Spielerinformationen (immer sichtbar, wenn im Spiel) -->
         <div id="player-section" class="container section">
             <h1>Hide and Seek</h1>
             <p class="info"><strong>Name:</strong> <span id="player-name">N/A</span> (ID: <span id="player-id" class="dimmed">N/A</span>)</p>
@@ -103,12 +239,14 @@
             </div>
         </div>
 
+        <!-- Abschnitt: Allgemeine Nachrichten (Fehler, Erfolge, Standortfehler) -->
         <div id="messages-section" class="container section" style="padding:0;">
             <p id="game-message" class="success" style="display:none;"></p>
             <p id="error-message" class="error" style="display:none;"></p>
             <p id="location-error-message" class="error" style="display:none;"></p>
         </div>
 
+        <!-- Abschnitt: Lobby-Ansicht -->
         <div id="lobby-section" class="container section">
             <h2>Aktive Spiel-Lobby</h2>
             <p>Spiel startet, sobald alle beigetretenen Spieler bereit sind.</p>
@@ -118,17 +256,24 @@
             </form>
         </div>
 
+        <!-- Abschnitt: Hider-spezifische Informationen -->
         <div id="hider-section" class="container section">
             <h2>Hider Informationen</h2>
+            <p class="info"><strong>Verfügbare Aufgaben-Skips:</strong> <span id="hider-skips-available-display">0</span></p> <!-- NEU: Anzeige der Skips -->
             <div id="hider-task-info" class="task-info" style="display:none;">
                 <h3>Aktuelle Aufgabe</h3>
                 <p><strong>Beschreibung:</strong> <span id="task-description"></span></p>
                 <p><strong>Punkte:</strong> <span id="task-points"></span></p>
                 <p><strong>Verbleibende Zeit:</strong> <span id="task-time-left" class="countdown" style="font-size:1em; color:#dc3545;"></span> Sek</p>
-                <form id="complete-task-form"><button type="submit" class="action-btn">Aufgabe als erledigt markieren!</button></form>
+                <form id="complete-task-form" style="margin-bottom: 5px;"><button type="submit" class="action-btn">Aufgabe als erledigt markieren!</button></form>
+                <!-- NEU: Aufgaben-Skip Button -->
+                <button id="skip-task-button" class="action-btn warning-btn" style="display:none;"> 
+                    Aufgabe überspringen (<span id="skips-left-in-button">0</span> übrig)
+                </button>
             </div>
             <p id="hider-no-task-message" style="display:none;" class="dimmed">Warte auf eine neue Aufgabe vom Server...</p>
             <p id="hider-caught-message" class="error" style="display:none;">Du wurdest gefangen! Du bist jetzt ein Seeker.</p>
+            <!-- Diese Nachrichten werden nicht mehr vom Server getriggert, aber die Elemente existieren weiterhin. -->
             <p id="hider-failed-task-message" class="error" style="display:none;">Du hast deine letzte Aufgabe nicht rechtzeitig geschafft und bist ausgeschieden.</p>
             <p id="hider-failed-location-message" class="error" style="display:none;">Standort nicht rechtzeitig aktualisiert - disqualifiziert!</p>
             <div id="hider-leaderboard-container" style="display:none;">
@@ -140,6 +285,7 @@
             </div>
         </div>
 
+        <!-- Abschnitt: Seeker-spezifische Informationen -->
         <div id="seeker-section" class="container section">
             <h2>Seeker Informationen</h2>
             <div id="seeker-hider-locations-container">
@@ -154,11 +300,13 @@
             </div>
         </div>
 
+        <!-- Abschnitt: Alle Spieler im Spiel -->
         <div id="all-players-section" class="container section">
             <h3>Alle Spieler im Spiel</h3>
             <ul id="all-players-list" class="player-list"></ul>
         </div>
 
+        <!-- Abschnitt: Spielende-Anzeige -->
         <div id="game-over-section" class="container section">
             <h2>Spiel Vorbei!</h2>
             <p id="game-over-message" style="font-size: 1.2em; font-weight: bold; text-align: center;"></p>
@@ -174,6 +322,7 @@
     </div>
 
     <script>
+        // Service Worker Registrierung für PWA Funktionalität (Offline-Caching, etc.)
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js', { scope: '/' }) 
@@ -182,20 +331,26 @@
             });
         }
 
+        // Globale Variable für die Spielerdaten, wird vom Client-Backend aktualisiert
         let currentPlayerData = {}; 
+
+        // Konstanten für Spielzustände (werden vom Server geliefert)
         const GAME_STATE_LOBBY = "lobby";
         const GAME_STATE_HIDER_WAIT = "hider_wait";
         const GAME_STATE_RUNNING = "running";
         const GAME_STATE_HIDER_WINS = "hider_wins";
         const GAME_STATE_SEEKER_WINS = "seeker_wins";
 
-        const LOCATION_UPDATE_INTERVAL_MS = 10000;
-        let locationWatchId = null;
-        let lastLocationSentTime = 0;
+        // Intervall für GPS-Updates und Überwachung
+        const LOCATION_UPDATE_INTERVAL_MS = 10000; // Alle 10 Sekunden
+        let locationWatchId = null; // ID für navigator.geolocation.watchPosition
+        let lastLocationSentTime = 0; // Zeitstempel des letzten gesendeten Standortes
 
+        // Keys für localStorage, um Serverdetails zu speichern
         const SERVER_HOST_KEY = 'hideAndSeekServerHost';
         const SERVER_PORT_KEY = 'hideAndSeekServerPort';
 
+        // Hilfsfunktionen für DOM-Manipulation
         function $(selector) { return document.querySelector(selector); }
         function show(id) { const el = $(`#${id}`); if (el) el.classList.add('visible'); }
         function hide(id) { const el = $(`#${id}`); if (el) el.classList.remove('visible'); }
@@ -206,6 +361,7 @@
             if (el) el.style.display = showFlag ? displayType : 'none';
         }
 
+        // Funktionen zum Speichern und Laden der Serverdetails im localStorage
         function saveServerDetails(host, port) {
             try {
                 localStorage.setItem(SERVER_HOST_KEY, host);
@@ -224,6 +380,7 @@
             }
         }
         
+        // Initialisiert die Server-Inputfelder mit gespeicherten Werten
         function initializeServerInputs() {
             const loadedDetails = loadServerDetails();
             const serverHostInput = $('#server-host');
@@ -233,26 +390,31 @@
             if (serverPortInput && loadedDetails.port) serverPortInput.value = loadedDetails.port;
         }
 
+        // Setzt dynamische UI-Elemente auf ihren Standardzustand zurück
         function resetDynamicUIElements() {
             console.log("Resetting dynamic UI elements to default state.");
             document.querySelectorAll('#app-container > .container.section').forEach(el => el.classList.remove('visible'));
 
+            // Nachrichtenbereiche zurücksetzen
             ['game-message', 'error-message', 'location-error-message', 'join-error-message'].forEach(id => {
                 setText(id, ''); toggleDisplay(id, false);
             });
             toggleDisplay('messages-section', false);
 
+            // Join-Sektion zurücksetzen
             setText('join-socket-status-display', 'Prüfe...'); $('#join-socket-status-display').className = 'dimmed';
             setText('join-game-status-display', 'Verbinde...');
             const joinButton = $('#join-game-button');
             if (joinButton) joinButton.disabled = true; 
 
+            // Pending-Lobby-Sektion zurücksetzen
             setText('pending-lobby-player-name', ''); setText('pending-lobby-player-role-wish', '');
             setText('pending-lobby-socket-status-display', 'Warte auf Server...');
             setText('pending-lobby-game-status-display', 'Warte auf Server...');
             const confirmLobbyButton = $('#confirm-lobby-join-button');
             if(confirmLobbyButton) confirmLobbyButton.disabled = true;
 
+            // Player-Sektion zurücksetzen
             setText('player-name', 'N/A'); setText('player-id', 'N/A'); setText('player-role', 'N/A');
             setText('player-status-ingame', 'N/A'); setText('game-status-display', 'Lade...');
             toggleDisplay('hider-wait-countdown-container', false); setText('hider-wait-time-left', '0');
@@ -260,32 +422,45 @@
             setText('player-location', 'Warte auf GPS...'); toggleDisplay('mapLink', false, 'inline'); setText('player-accuracy', 'N/A');
             toggleDisplay('hider-warning-text', false);
             
+            // Frühes Ende Abstimmung zurücksetzen
             toggleDisplay('early-end-vote-container', false);
             const earlyEndBtn = $('#request-early-end-button');
             if(earlyEndBtn) { earlyEndBtn.disabled = true; earlyEndBtn.textContent = 'Runde vorzeitig beenden';}
             setText('early-end-vote-info', '0/0 Spieler wollen Runde beenden.');
 
+            // Lobby-Sektion zurücksetzen
             setHtml('lobby-player-list', '<li class="dimmed">Warte auf Spieler...</li>');
             const readyButton = $('#ready-button');
             if (readyButton) {
                 readyButton.textContent = 'Klicken: Ich bin bereit!'; readyButton.className = 'ready'; readyButton.disabled = true;
             }
-
+            
+            // Hider-Sektion zurücksetzen (inkl. NEUER Skip-Anzeige)
+            setText('hider-skips-available-display', '0'); 
             toggleDisplay('hider-task-info', false); setText('task-description', ''); setText('task-points', ''); setText('task-time-left', '0');
             const completeTaskButton = $('#complete-task-form button');
             if(completeTaskButton) completeTaskButton.disabled = true;
+            const skipTaskButton = $('#skip-task-button'); 
+            if(skipTaskButton) { 
+                toggleDisplay(skipTaskButton.id, false); // Skip-Button ausblenden
+                skipTaskButton.disabled = true;
+                if($('#skips-left-in-button')) setText('skips-left-in-button', '0'); // Anzahl Skips im Button zurücksetzen
+            }
             toggleDisplay('hider-no-task-message', true);
             updateHiderStatusMessages(null); 
             const hiderTbody = $('#hider-leaderboard tbody'); if (hiderTbody) hiderTbody.innerHTML = '';
             toggleDisplay('hider-leaderboard-container', false);
 
+            // Seeker-Sektion zurücksetzen
             setHtml('seeker-hider-list', ''); toggleDisplay('seeker-no-hiders-message', true);
             const seekerHiderContainer = $('#seeker-hider-locations-container'); if(seekerHiderContainer) toggleDisplay(seekerHiderContainer.id, true);
             setHtml('seeker-powerups-list', ''); toggleDisplay('seeker-no-powerups-message', true);
             const seekerPowerupsContainer = $('#seeker-powerups-container'); if(seekerPowerupsContainer) toggleDisplay(seekerPowerupsContainer.id, true);
 
+            // Alle Spieler-Sektion zurücksetzen
             setHtml('all-players-list', '<li class="dimmed">Keine Spielerinformationen.</li>');
 
+            // Game Over-Sektion zurücksetzen
             setText('game-over-message', '');
             const gameOverTbody = $('#game-over-leaderboard tbody'); if (gameOverTbody) gameOverTbody.innerHTML = '';
             toggleDisplay('game-over-leaderboard-container', false);
@@ -294,12 +469,13 @@
         }
 
 
+        // Aktualisiert die gesamte Benutzeroberfläche basierend auf den empfangenen Daten
         function updateUI(data) {
             console.log("UI Update (new data):", JSON.parse(JSON.stringify(data)));
-            // console.log("UI Update (current internal player data before update):", JSON.parse(JSON.stringify(currentPlayerData)));
+            
+            resetDynamicUIElements(); // Alle dynamischen Elemente vorab zurücksetzen
 
-            resetDynamicUIElements(); 
-
+            // Speichert relevante Player-Daten, um später zu prüfen, ob sich Eingaben geändert haben (z.B. Host/Port)
             const prevPlayerDataForInputChecks = {
                 session_nickname: currentPlayerData.session_nickname,
                 session_role_choice: currentPlayerData.session_role_choice,
@@ -308,8 +484,10 @@
                 prefill_nickname: currentPlayerData.prefill_nickname
             };
             
+            // Aktuelle Spielerdaten global speichern
             currentPlayerData = JSON.parse(JSON.stringify(data)); 
 
+            // Nachrichten anzeigen und nach Timeout ausblenden
             let messagesWereShown = false;
             if (data.game_message) {
                 setText('game-message', data.game_message); toggleDisplay('game-message', true);
@@ -319,7 +497,7 @@
                 setText('error-message', data.error_message); toggleDisplay('error-message', true);
                 messagesWereShown = true; setTimeout(() => { toggleDisplay('error-message', false); if(currentPlayerData) currentPlayerData.error_message = null; }, 8000);
             }
-            // Join error specifically for join/pending lobby states
+            // Join-Fehler speziell für Join- oder Pending-Lobby-Zustände
             if (data.join_error && (!data.player_id || (data.player_id && data.game_state?.status === GAME_STATE_LOBBY && !data.confirmed_for_lobby) )) {
                 setText('join-error-message', data.join_error); toggleDisplay('join-error-message', true);
                 messagesWereShown = true;
@@ -330,28 +508,32 @@
             if(messagesWereShown) show('messages-section');
 
 
+            // Spielzustandsinformationen vom Server
             const serverGameStatus = data.game_state?.status;
             const serverGameStatusDisplay = data.game_state?.status_display || "Lade...";
             const isSocketConnected = data.is_socket_connected_to_server === true;
 
+            // Standortanzeige aktualisieren
             const locationDisplay = $('#player-location');
-            if (data.location && data.location.length >= 2) { 
+            if (data.location && data.location.length >= 2) { // Standort vom Server
                 locationDisplay.textContent = `Lat: ${parseFloat(data.location[0]).toFixed(5)}, Lon: ${parseFloat(data.location[1]).toFixed(5)} (Server)`;
                 $('#mapLink a').href = `https://www.google.com/maps?q=${data.location[0]},${data.location[1]}`;
                 toggleDisplay('mapLink', true, 'inline');
                 if (data.location.length > 2 && data.location[2] !== null) {
                     setText('player-accuracy', parseFloat(data.location[2]).toFixed(1));
                 } else { setText('player-accuracy', 'N/A'); }
-            } else if (locationWatchId !== null) { 
+            } else if (locationWatchId !== null) { // Standort wird vom Browser ermittelt
                  locationDisplay.textContent = 'Standort wird vom Browser ermittelt...';
                  toggleDisplay('mapLink', false); setText('player-accuracy', 'N/A');
-            } else { 
+            } else { // Kein Standort bekannt
                  locationDisplay.textContent = 'Standort unbekannt.';
                  toggleDisplay('mapLink', false); setText('player-accuracy', 'N/A');
             }
             
+            // Hider-Warnung anzeigen
             toggleDisplay('hider-warning-text', data.role === 'hider' && data.hider_location_update_imminent === true && data.player_status === 'active');
             
+            // Abstimmungs-Button und -Info aktualisieren
             const earlyEndVoteContainer = $('#early-end-vote-container');
             const earlyEndVoteButton = $('#request-early-end-button');
             const earlyEndVoteInfo = $('#early-end-vote-info');
@@ -362,43 +544,41 @@
                 earlyEndVoteInfo.textContent = `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`;
             }
 
+            // UI-Ansicht basierend auf Player-ID und Spielstatus steuern
             if (!data.player_id) { 
-                // This case means the client is not (yet) recognized by the server with a player_id.
-                // This could be the initial join screen, or after a join attempt where player_id hasn't been assigned.
+                // Client ist noch nicht beim Server registriert oder wurde zurückgesetzt
                 show('join-section');
                 setText('join-socket-status-display', isSocketConnected ? "Verbunden" : "Nicht verbunden");
                 $('#join-socket-status-display').className = isSocketConnected ? 'status-active' : 'error';
                 setText('join-game-status-display', serverGameStatusDisplay);
 
+                // Inputfelder für Nickname, Rolle und Serverdetails mit Werten vorbelegen/aktualisieren
                 const nicknameInput = $('#nickname');
                 const roleChoiceInput = $('#role-choice');
                 const serverHostInput = $('#server-host');
                 const serverPortInput = $('#server-port');
 
-                if (document.activeElement !== nicknameInput) {
-                    // data.player_name here is the name used in the last join attempt, or null if none.
-                    // data.session_nickname is from Flask session (last successful join name).
-                    // data.prefill_nickname is the random initial default.
-                    if (data.player_name) { // Name from current/last join attempt by this client instance
+                if (document.activeElement !== nicknameInput) { // Nicht überschreiben, wenn Benutzer gerade tippt
+                    if (data.player_name) { 
                         nicknameInput.value = data.player_name;
-                    } else if (data.session_nickname) { // Name from Flask session (previous game)
+                    } else if (data.session_nickname) { // Aus Flask-Session (letzter erfolgreicher Join)
                         nicknameInput.value = data.session_nickname;
                     } else if (data.prefill_nickname && (nicknameInput.value === "" || nicknameInput.value.startsWith("Spieler"))) {
-                        nicknameInput.value = data.prefill_nickname;
+                        nicknameInput.value = data.prefill_nickname; // Zufälliger Prefill-Name
                     }
                 }
 
                 if (document.activeElement !== roleChoiceInput) {
-                    if (data.role) { // Role from current/last join attempt
+                    if (data.role) { 
                         roleChoiceInput.value = data.role;
-                    } else if (data.session_role_choice) { // Role from Flask session
+                    } else if (data.session_role_choice) {
                         roleChoiceInput.value = data.session_role_choice;
                     }
                 }
                 
                 if (document.activeElement !== serverHostInput) {
                     if (data.current_server_host) serverHostInput.value = data.current_server_host;
-                    else { // Fallback to localStorage if current_server_host is not set (e.g. very first load)
+                    else { 
                         const loadedDetails = loadServerDetails();
                         if (loadedDetails.host) serverHostInput.value = loadedDetails.host;
                     }
@@ -410,39 +590,46 @@
                         if (loadedDetails.port) serverPortInput.value = loadedDetails.port;
                     }
                 }
-                $('#join-game-button').disabled = false; // Join button should generally be enabled on this screen
+                $('#join-game-button').disabled = false; // Join-Button generell aktivieren
 
-                // If client.py thinks it's in a join process (data.player_name is set) but no ID yet
+                // Statusanzeige während des Join-Versuchs
                 if (data.player_name && !data.player_id && isSocketConnected && serverGameStatus !== "disconnected") {
-                    setText('game-status-display', serverGameStatusDisplay || "Sende Beitrittsanfrage..."); // Überschreibe join-game-status-display
+                    setText('game-status-display', serverGameStatusDisplay || "Sende Beitrittsanfrage...");
                 }
 
 
             } else { 
-                show('player-section'); 
+                // Client ist beim Server registriert (hat eine player_id)
+                show('player-section'); // Grundlegende Spielerinfos immer anzeigen
                 setText('player-name', data.player_name || "Unbekannt");
                 setText('player-id', data.player_id);
                 setText('player-role', data.role || "Unbekannt");
                 
+                // Text für Spielerstatus im Spiel
                 let playerStatusText = 'Unbekannt';
                 if (data.player_status === 'active') playerStatusText = 'Aktiv im Spiel';
                 else if (data.player_status === 'caught') playerStatusText = 'Gefangen (jetzt Seeker)';
+                // Diese Status werden nicht mehr vom Server gesetzt, aber Code bleibt
                 else if (data.player_status === 'failed_task') playerStatusText = 'Ausgeschieden (Aufgabe verfehlt)';
                 else if (data.player_status === 'failed_loc_update') playerStatusText = 'Ausgeschieden (Standort nicht aktualisiert)';
                 setText('player-status-ingame', playerStatusText);
                 setText('game-status-display', serverGameStatusDisplay);
 
+                // Nachrichten für Hider-Status (gefangen, etc.) aktualisieren
                 updateHiderStatusMessages(data.player_status);
 
+                // Spezifische Ansichten je nach Spielphase
                 if (!data.confirmed_for_lobby && serverGameStatus === GAME_STATE_LOBBY) {
+                    // Spieler ist registriert, aber hat Lobby-Beitritt noch nicht bestätigt
                     show('pending-lobby-join-section');
                     setText('pending-lobby-player-name', data.player_name || "Dein Name");
                     setText('pending-lobby-player-role-wish', data.role || "Deine Rolle");
                     setText('pending-lobby-socket-status-display', isSocketConnected ? "Verbunden" : "Nicht verbunden");
                     $('#pending-lobby-socket-status-display').className = isSocketConnected ? 'status-active' : 'error';
                     setText('pending-lobby-game-status-display', serverGameStatusDisplay);
-                    $('#confirm-lobby-join-button').disabled = !isSocketConnected;
+                    $('#confirm-lobby-join-button').disabled = !isSocketConnected; // Button nur bei Verbindung aktiv
                 } else if (data.confirmed_for_lobby && serverGameStatus === GAME_STATE_LOBBY) {
+                    // Spieler in der Lobby und bereit zum Spielstart
                     show('lobby-section');
                     updateLobbyPlayerList(data.lobby_players, String(data.player_id));
                     const readyButton = $('#ready-button');
@@ -450,18 +637,26 @@
                     readyButton.className = data.player_is_ready ? 'unready' : 'ready';
                     readyButton.disabled = !isSocketConnected;
                 } else if (serverGameStatus === GAME_STATE_HIDER_WAIT) {
+                    // Hider-Vorbereitungszeit
                     toggleDisplay('hider-wait-countdown-container', true);
                     setText('hider-wait-time-left', data.game_state?.hider_wait_time_left || '0');
-                    if (data.role === 'hider') show('hider-section'); else if (data.role === 'seeker') show('seeker-section');
+                    if (data.role === 'hider') {
+                        show('hider-section');
+                        setText('hider-skips-available-display', data.task_skips_available || 0); // NEU: Skips anzeigen
+                    } else if (data.role === 'seeker') {
+                         show('seeker-section');
+                    }
                     show('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
                 } else if (serverGameStatus === GAME_STATE_RUNNING) {
+                    // Spiel läuft
                     toggleDisplay('game-time-left-container', true);
                     const timeLeft = data.game_state?.game_time_left || 0;
                     setText('game-time-left', `${Math.floor(timeLeft / 60)} Min ${timeLeft % 60} Sek`);
 
                     if (data.role === 'hider') {
                         show('hider-section');
-                        updateHiderTask(data.current_task);
+                        setText('hider-skips-available-display', data.task_skips_available || 0); // NEU: Skips anzeigen
+                        updateHiderTask(data.current_task, data.task_skips_available); // Aufgabe und Skips aktualisieren
                         updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'hider-leaderboard');
                     } else if (data.role === 'seeker') {
                         show('seeker-section');
@@ -470,12 +665,14 @@
                     }
                     show('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
                 } else if (serverGameStatus === GAME_STATE_HIDER_WINS || serverGameStatus === GAME_STATE_SEEKER_WINS) {
+                    // Spiel vorbei
                     show('game-over-section');
                     setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
                     updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard'); 
                     $('#go-to-registration-button').disabled = false;
                 }
             }
+            // Standortupdates starten/stoppen basierend auf dem Spielstatus
             if (data.player_id && (serverGameStatus === GAME_STATE_LOBBY || serverGameStatus === GAME_STATE_HIDER_WAIT || serverGameStatus === GAME_STATE_RUNNING)) {
                 startLocationUpdates();
             } else {
@@ -483,6 +680,7 @@
             }
         }
 
+        // Aktualisiert die Liste der Spieler in der Lobby
         function updateLobbyPlayerList(lobbyPlayers, currentPlayerIdStr) {
             const ul = $('#lobby-player-list'); setHtml('lobby-player-list', '');
             if (lobbyPlayers && Object.keys(lobbyPlayers).length > 0) {
@@ -496,6 +694,8 @@
                 }
             } else { ul.innerHTML = '<li class="dimmed">Warte auf weitere Spieler...</li>'; }
         }
+
+        // Aktualisiert die Liste aller Spieler im Spiel
         function updateAllPlayersList(allPlayers, currentPlayerIdStr) {
             const el = $('#all-players-list'); setHtml('all-players-list', '');
             if (allPlayers && Object.keys(allPlayers).length > 0) {
@@ -504,7 +704,8 @@
                     let statusDisplay;
                     if (p.status === 'active') statusDisplay = '<span class="status-active">Aktiv</span>';
                     else if (p.status === 'caught') statusDisplay = '<span class="status-caught">Gefangen</span>';
-                    else if (p.status === 'failed_task') statusDisplay = '<span class="status-failed">Aufgabe verfehlt</span>';
+                    // Diese werden nicht mehr vom Server gesetzt
+                    else if (p.status === 'failed_task') statusDisplay = '<span class="status-failed">Aufgabe verfehlt</span>'; 
                     else if (p.status === 'failed_loc_update') statusDisplay = '<span class="status-failed-loc">Kein Standort</span>';
                     else statusDisplay = `<span class="dimmed">${p.status || 'Unbekannt'}</span>`;
                     li.innerHTML = `${p.name} (Rolle: ${p.role || 'N/A'}) - ${statusDisplay}`;
@@ -513,25 +714,46 @@
                 }
             } else { el.innerHTML = '<li class="dimmed">Keine Spielerinformationen.</li>'; }
         }
-        function updateHiderTask(task) {
+
+        // Aktualisiert die Aufgabeninformationen für Hider
+        function updateHiderTask(task, taskSkipsAvailable) { // NEU: taskSkipsAvailable als Parameter
             const socketConnected = currentPlayerData && currentPlayerData.is_socket_connected_to_server === true;
             const isActiveHider = currentPlayerData && currentPlayerData.role === 'hider' && currentPlayerData.player_status === 'active';
+            
+            const skipTaskButton = $('#skip-task-button');
+            const skipsLeftInButtonSpan = $('#skips-left-in-button');
+
             if (task && task.description && isActiveHider) {
                 toggleDisplay('hider-task-info', true); toggleDisplay('hider-no-task-message', false);
                 setText('task-description', task.description); setText('task-points', task.points);
                 setText('task-time-left', task.time_left_seconds);
                 $('#complete-task-form button').disabled = task.time_left_seconds <= 0 || !socketConnected;
+
+                // NEU: Logik für den Skip-Button
+                if (skipTaskButton && skipsLeftInButtonSpan) {
+                    const numSkips = typeof taskSkipsAvailable === 'number' ? taskSkipsAvailable : 0;
+                    toggleDisplay(skipTaskButton.id, true); // Button anzeigen
+                    skipTaskButton.disabled = !socketConnected || numSkips <= 0 || task.time_left_seconds <= 0; // Deaktivieren, wenn keine Skips oder keine Aufgabe
+                    setText(skipsLeftInButtonSpan.id, numSkips); // Anzahl Skips im Button aktualisieren
+                    skipTaskButton.title = numSkips > 0 ? "Diese Aufgabe überspringen" : "Keine Skips mehr verfügbar";
+                }
+
             } else {
                 toggleDisplay('hider-task-info', false); 
                 toggleDisplay('hider-no-task-message', isActiveHider); 
+                if (skipTaskButton) toggleDisplay(skipTaskButton.id, false); // Button ausblenden, wenn keine Aufgabe
             }
         }
+
+        // Aktualisiert Hider-Status-Nachrichten (Gefangen, etc.)
         function updateHiderStatusMessages(playerStatus) { 
             toggleDisplay('hider-caught-message', playerStatus === 'caught');
+            // Diese Nachrichten werden nicht mehr vom Server getriggert, bleiben aber im HTML
             toggleDisplay('hider-failed-task-message', playerStatus === 'failed_task');
             toggleDisplay('hider-failed-location-message', playerStatus === 'failed_loc_update');
         }
 
+        // Aktualisiert die Hider-Bestenliste
         function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId = 'hider-leaderboard') {
             const table = $(`#${tableId}`); const tbody = table ? table.querySelector('tbody') : null;
             const containerId = (tableId === 'hider-leaderboard') ? 'hider-leaderboard-container' : 'game-over-leaderboard-container';
@@ -561,6 +783,8 @@
                  toggleDisplay(containerId, false); 
             }
         }
+
+        // Aktualisiert die Liste der sichtbaren Hider für Seeker
         function updateSeekerHiderList(hiderLocations) {
             const ul = $('#seeker-hider-list'); const noHidersMsg = $('#seeker-no-hiders-message');
             ul.innerHTML = ''; const socketConnected = currentPlayerData && currentPlayerData.is_socket_connected_to_server === true;
@@ -576,6 +800,7 @@
                         <button class="catch-hider-btn action-btn" data-hider-id="${hiderId}" ${!socketConnected ? 'disabled' : ''}>Fangen!</button>`;
                     ul.appendChild(li);
                 }
+                // Event-Listener für "Fangen"-Buttons
                 document.querySelectorAll('.catch-hider-btn').forEach(button => {
                     button.onclick = async function() { 
                         this.disabled = true; 
@@ -584,6 +809,8 @@
                 });
             } else { toggleDisplay(noHidersMsg.id, isActiveSeeker); } 
         }
+
+        // Aktualisiert die Liste der verfügbaren Power-Ups für Seeker
         function updateSeekerPowerups(powerups) {
             const listDiv = $('#seeker-powerups-list'); const noPowerupsMsg = $('#seeker-no-powerups-message');
             listDiv.innerHTML = ''; const socketConnected = currentPlayerData && currentPlayerData.is_socket_connected_to_server === true;
@@ -597,6 +824,7 @@
                     button.className = 'use-powerup-btn action-btn'; button.disabled = !socketConnected;
                     listDiv.appendChild(button);
                 });
+                // Event-Listener für "Einsetzen"-Buttons
                 document.querySelectorAll('.use-powerup-btn').forEach(button => {
                     button.onclick = async function() { 
                         this.disabled = true; 
@@ -606,23 +834,24 @@
             } else { toggleDisplay(noPowerupsMsg.id, isActiveSeeker); } 
         }
 
+        // Sendet eine Aktion an das lokale Client-Backend (Flask)
         async function sendClientAction(endpoint, bodyPayload = null, triggeringButton = null) {
+            // Button deaktivieren, um Mehrfachklicks zu verhindern
             if (triggeringButton) triggeringButton.disabled = true;
-            // Special handling for join button since it's not always passed as triggeringButton
-            else if (endpoint === '/join_game') {
+            else if (endpoint === '/join_game') { // Spezialfall für den Join-Button
                 const joinBtn = $('#join-game-button');
                 if (joinBtn) joinBtn.disabled = true;
             }
-
 
             try {
                 const options = { method: 'POST', headers: {'Content-Type': 'application/json'}};
                 if (bodyPayload) options.body = JSON.stringify(bodyPayload);
                 const response = await fetch(endpoint, options);
                 const responseData = await response.json(); 
-                updateUI(responseData); 
+                updateUI(responseData); // UI mit der Antwort aktualisieren
             } catch (error) {
                 console.error(`Netzwerk-/Parse-Fehler bei Aktion ${endpoint}:`, error);
+                // Im Fehlerfall den UI-Status entsprechend anpassen, um Benutzer zu informieren
                 const errorData = JSON.parse(JSON.stringify(currentPlayerData || {})); 
                 errorData.error_message = `Netzwerkfehler: Aktion '${endpoint.substring(1)}' fehlgeschlagen. Prüfe Verbindung zum lokalen Client-Python-Skript.`;
                 if (!errorData.game_state) errorData.game_state = {}; 
@@ -632,9 +861,11 @@
             }
         }
         
+        // Callback-Funktion bei erfolgreichem GPS-Update
         function handleLocationSuccess(position) {
             const lat = position.coords.latitude; const lon = position.coords.longitude; const accuracy = position.coords.accuracy;
             const locationTextEl = $('#player-location');
+            // Zeigt die Browser-GPS-Daten an, bis der Server eigene Daten liefert
             if (locationTextEl && !locationTextEl.textContent.includes('(Server)')) {
                  setText('player-location', `Lat: ${lat.toFixed(5)}, Lon: ${lon.toFixed(5)} (Browser)`);
             }
@@ -643,20 +874,22 @@
             toggleDisplay('mapLink', true, 'inline'); 
             
             const locErrorMsg = $('#location-error-message');
-            if (locErrorMsg && locErrorMsg.style.display !== 'none') { // Hide error if successfully got location
+            if (locErrorMsg && locErrorMsg.style.display !== 'none') { // Fehler ausblenden bei Erfolg
                 toggleDisplay('location-error-message', false);
-                // Check if messages-section can be hidden
                 if (!$('#game-message').textContent && !$('#error-message').textContent && !$('#join-error-message').textContent) {
                     toggleDisplay('messages-section', false);
                 }
             }
 
             const now = Date.now();
+            // Standortdaten nur senden, wenn Spieler-ID vorhanden und ausreichend Zeit seit letztem Senden vergangen ist
             if (currentPlayerData && currentPlayerData.player_id && (now - lastLocationSentTime > (LOCATION_UPDATE_INTERVAL_MS / 2) || lastLocationSentTime === 0 )) {
                 sendLocationToClientBackend(lat, lon, accuracy);
                 lastLocationSentTime = now;
             }
         }
+
+        // Callback-Funktion bei GPS-Fehler
         function handleLocationError(error) {
             let message = "Unbekannter Standortfehler";
             switch(error.code) {
@@ -673,6 +906,8 @@
             setText('location-error-message', message); toggleDisplay('location-error-message', true);
             show('messages-section');
         }
+
+        // Sendet Standortdaten an das lokale Client-Backend
         async function sendLocationToClientBackend(lat, lon, accuracy) {
             try {
                 const response = await fetch('/update_location_from_browser', {
@@ -685,6 +920,8 @@
                 }
             } catch (error) { console.error("Netzwerkfehler Senden Standort an Client-Backend:", error); }
         }
+
+        // Startet die kontinuierliche GPS-Überwachung
         function startLocationUpdates() {
             if (navigator.geolocation) {
                 if (locationWatchId === null) { 
@@ -697,6 +934,8 @@
                 if(locTextEl && !locTextEl.textContent.includes('(Server)')) setText('player-location', 'Browser-Geolocation nicht unterstützt.'); 
             }
         }
+
+        // Stoppt die GPS-Überwachung
         function stopLocationUpdates() {
             if (navigator.geolocation && locationWatchId !== null) {
                 console.log("Stoppe Browser-Standort-Updates.");
@@ -704,8 +943,9 @@
             }
         }
 
+        // Event-Listener für das Join-Formular
         $('#join-form').addEventListener('submit', async (event) => {
-            event.preventDefault();
+            event.preventDefault(); // Standard-Formular-Submit verhindern
             const nickname = $('#nickname').value; const role = $('#role-choice').value;
             const serverHost = $('#server-host').value; const serverPort = $('#server-port').value;
 
@@ -714,47 +954,63 @@
                 setText(joinError.id, 'Nickname, Server-Host und Port sind erforderlich.');
                 toggleDisplay(joinError.id, true); show('messages-section'); return;
             }
-            saveServerDetails(serverHost, serverPort); 
+            saveServerDetails(serverHost, serverPort); // Serverdetails speichern
             await sendClientAction('/join_game', { nickname, role, server_host: serverHost, server_port: serverPort }, event.submitter);
         });
 
+        // Event-Listener für den "Lobby beitreten"-Button
         $('#confirm-lobby-join-button')?.addEventListener('click', async (event) => { 
             await sendClientAction('/confirm_lobby_join', null, event.target);
         });
 
+        // Event-Listener für den "Bereit"-Button
         $('#ready-form').addEventListener('submit', async (event) => {
-            event.preventDefault(); const newReadyStatus = !(currentPlayerData.player_is_ready || false);
+            event.preventDefault(); 
+            const newReadyStatus = !(currentPlayerData.player_is_ready || false); // Status umschalten
             await sendClientAction('/set_ready', { ready_status: newReadyStatus }, event.submitter);
         });
 
+        // Event-Listener für den "Aufgabe erledigt"-Button
         $('#complete-task-form button')?.addEventListener('click', async (event) => {
             event.preventDefault(); 
             await sendClientAction('/complete_task', null, event.target);
         });
         
+        // Event-Listener für den "Runde vorzeitig beenden"-Button
         $('#request-early-end-button')?.addEventListener('click', async (event) => {
             await sendClientAction('/request_early_round_end_action', null, event.target);
         });
+
+        // NEU: Event-Listener für den "Aufgabe überspringen"-Button
+        $('#skip-task-button')?.addEventListener('click', async (event) => { 
+            event.preventDefault();
+            await sendClientAction('/skip_task', null, event.target);
+        });
         
+        // Funktion zum Zurückkehren zum Registrierungsbildschirm
         async function handleGoToRegistration() { 
             const goToRegButton = $('#go-to-registration-button');
             await sendClientAction('/leave_game_and_go_to_join_screen', null, goToRegButton);
         }
 
+        // Fetched den aktuellen Status vom lokalen Client-Backend und aktualisiert die UI
         async function fetchStatusAndUpdateUI() {
             try {
                 const response = await fetch('/status');
                 if (!response.ok) { 
                     console.error(`Fehler beim Abrufen von /status: ${response.status}`);
+                    // Fehlerfall: Lokales Backend nicht erreichbar
                     const tempErrorData = JSON.parse(JSON.stringify(currentPlayerData || {}));
                     if (!tempErrorData.game_state) tempErrorData.game_state = {};
                     tempErrorData.game_state.status_display = `Fehler Client-Server (${response.status}).`;
                     tempErrorData.error_message = "Verbindung zum lokalen Client-Server (Python) verloren.";
                     tempErrorData.is_socket_connected_to_server = false; updateUI(tempErrorData); return;
                 }
-                const data = await response.json(); updateUI(data);
+                const data = await response.json(); 
+                updateUI(data); // UI mit den empfangenen Daten aktualisieren
             } catch (error) { 
                 console.error('Netzwerkfehler beim Abrufen von /status:', error);
+                // Fehlerfall: Lokales Backend nicht erreichbar (z.B. client.py nicht gestartet)
                 const tempErrorData = JSON.parse(JSON.stringify(currentPlayerData || {}));
                 if (!tempErrorData.game_state) tempErrorData.game_state = {};
                 tempErrorData.game_state.status_display = "Client-Server (Python) nicht erreichbar.";
@@ -763,10 +1019,11 @@
             }
         }
         
+        // Wird ausgeführt, sobald das DOM geladen ist
         document.addEventListener('DOMContentLoaded', () => {
-            initializeServerInputs(); 
-            fetchStatusAndUpdateUI(); 
-            setInterval(fetchStatusAndUpdateUI, 2500); 
+            initializeServerInputs(); // Server-Inputfelder vorbelegen
+            fetchStatusAndUpdateUI(); // Ersten Status abrufen
+            setInterval(fetchStatusAndUpdateUI, 2500); // Alle 2.5 Sekunden den Status aktualisieren (Polling)
         });
     </script>
 </body>
