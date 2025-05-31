@@ -138,13 +138,17 @@ def network_communication_thread():
                         if "player_id" in message and message["player_id"] is None and client_view_data["player_id"] is not None:
                             print("CLIENT NET: Player_id wurde vom Server auf null gesetzt. Client wird zurückgesetzt.")
                             client_view_data["player_id"] = None
-                            client_view_data["player_name"] = None
-                            client_view_data["role"] = None
+                            client_view_data["player_name"] = None # Reset des Namens, der für den Join-Versuch verwendet wurde
+                            client_view_data["role"] = None # Reset der Rolle
                             client_view_data["confirmed_for_lobby"] = False
                             client_view_data["player_is_ready"] = False
+                            # Session-Daten (nickname, role_choice) bleiben erhalten für Prefill in der UI
                         
                         elif "player_id" in message and message["player_id"] is not None:
                             client_view_data["player_id"] = message["player_id"]; client_view_data["join_error"] = None
+                            # Der Name und die Rolle in client_view_data wurden bereits in /join_game gesetzt
+                            # oder kommen jetzt direkt vom Server. Wenn der Server Name/Rolle sendet,
+                            # sollten diese die in client_view_data überschreiben.
                         
                         update_keys = [
                             "player_name", "role", "confirmed_for_lobby", "player_is_ready", 
@@ -190,11 +194,11 @@ def network_communication_thread():
                         client_view_data["error_message"] = error_text
                         critical_errors = ["Spiel läuft bereits", "Spiel voll", "Nicht authentifiziert", "Bitte neu beitreten", "Du bist nicht mehr Teil des aktuellen Spiels"]
                         if any(crit_err in error_text for crit_err in critical_errors):
-                            client_view_data["join_error"] = error_text; client_view_data["player_id"] = None 
-                            # Hier nicht is_connected_to_server = False setzen, nur weil der Server einen logischen Fehler sendet.
-                            # Die Verbindung könnte noch bestehen. Nur bei echten Socket-Fehlern trennen.
-                            # Wenn der Fehler z.B. "Nicht authentifiziert" ist und der Server die Verbindung deswegen schließt,
-                            # wird das durch den recv-Fehler (leeres data_chunk oder ConnectionResetError) behandelt.
+                            client_view_data["join_error"] = error_text
+                            if client_view_data["player_id"] is not None: # Nur zurücksetzen, wenn es eine ID gab
+                                client_view_data["player_id"] = None 
+                                client_view_data["player_name"] = None # Auch den Namen des Join-Versuchs zurücksetzen
+                                client_view_data["role"] = None
                     
                     elif msg_type == "acknowledgement": 
                         ack_message = message.get("message", "Aktion bestätigt.")
@@ -236,16 +240,16 @@ def icons_route(filename): return send_from_directory(app.static_folder, f'icons
 @app.route('/status', methods=['GET'])
 def get_status():
     with client_data_lock:
-        # Stelle sicher, dass die aktuellen Server-Infos im Status sind
         client_view_data["current_server_host"] = SERVER_HOST
         client_view_data["current_server_port"] = SERVER_PORT
         
         data_to_send = client_view_data.copy()
         data_to_send["session_nickname"] = session.get("nickname")
         data_to_send["session_role_choice"] = session.get("role_choice")
-        if not data_to_send.get("player_id") and session.get("nickname"):
-            data_to_send["player_name_pending"] = session.get("nickname")
-            data_to_send["role_pending"] = session.get("role_choice")
+        # `player_name_pending` und `role_pending` werden nicht mehr explizit aus der Session hier gesetzt,
+        # da client_view_data.player_name und .role nun den aktuellen Join-Versuch oder den vom Server
+        # bestätigten Namen/Rolle enthalten. Die UI wird dies verwenden.
+        # Session-Daten sind nur für den Prefill in der UI, falls client_view_data leer ist.
         return jsonify(data_to_send)
 
 @app.route('/join_game', methods=['POST'])
@@ -283,54 +287,66 @@ def join_game_route():
             client_view_data["current_server_port"] = SERVER_PORT
             server_details_changed = True
         
+        # Wichtig: client_view_data zurücksetzen, bevor neuer Join-Versuch
+        # player_id wird hier null gesetzt, um den Join-Prozess neu zu starten.
+        # Der Server weist eine neue ID zu oder lehnt ab.
         client_view_data.update({
-            "player_id": None, "player_name": nickname, "role": role_choice,
+            "player_id": None, 
+            "player_name": nickname, # Name für diesen Join-Versuch
+            "role": role_choice,     # Rolle für diesen Join-Versuch
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "join_error": None, "error_message": None, "game_message": None,
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
             "power_ups_available": [], "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False
+            "player_has_requested_early_end": False,
+            # game_state.status und status_display werden durch server_details_changed oder send_message_to_server beeinflusst
         })
-        if "game_state" not in client_view_data or client_view_data["game_state"] is None: client_view_data["game_state"] = {}
+        if "game_state" not in client_view_data or client_view_data["game_state"] is None: 
+            client_view_data["game_state"] = {"status": "disconnected", "status_display": "Initialisiere..."} # Default game_state
         
         if server_details_changed:
+            client_view_data["game_state"]["status"] = "disconnected" # Ähnlich wie initialer Status
             client_view_data["game_state"]["status_display"] = f"Serveradresse aktualisiert. Verbinde mit {SERVER_HOST}:{SERVER_PORT}..."
             client_view_data["is_socket_connected_to_server"] = False
             is_connected_to_server = False 
             if server_socket_global:
                 print("CLIENT: Schließe alte Socket-Verbindung aufgrund geänderter Serverdetails.")
                 try:
-                    server_socket_global.shutdown(socket.SHUT_RDWR)
+                    server_socket_global.shutdown(socket.SHUT_RDWR) # Graceful shutdown versuchen
                     server_socket_global.close()
                 except OSError as e:
                     print(f"CLIENT: Fehler beim Schließen des alten Sockets: {e}")
                 server_socket_global = None
-            client_view_data["join_error"] = "Serveradresse geändert. Verbindung wird neu aufgebaut."
+            # join_error hier nicht setzen, da der Netzwerkthread sich neu verbindet. Status wird über status_display angezeigt.
         else:
-             client_view_data["game_state"]["status_display"] = f"Sende Beitritt als {nickname}..."
+             client_view_data["game_state"]["status_display"] = f"Sende Beitrittsanfrage als {nickname}..."
     
     response_for_js = {"success": True, "message": "Beitrittsanfrage wird verarbeitet."}
     
     if server_details_changed:
-        # Die JOIN_GAME Nachricht wird nicht gesendet, da der Netzwerkthread sich erst neu verbinden muss.
-        # Die UI wird durch das Polling von /status über den neuen Verbindungsstatus informiert.
         response_for_js = {"success": True, "message": "Serveradresse geändert. Verbindung wird neu aufgebaut. Bitte warten."}
     else:
         socket_conn_ok = False
         with client_data_lock: socket_conn_ok = client_view_data.get("is_socket_connected_to_server", False)
 
-        if socket_conn_ok and is_connected_to_server: # Prüfe is_connected_to_server explizit
+        if socket_conn_ok and is_connected_to_server:
             if not send_message_to_server({"action": "JOIN_GAME", "name": nickname, "role": role_choice}):
                 response_for_js = {"success": False, "message": "Senden der Join-Anfrage fehlgeschlagen."}
                 with client_data_lock: client_view_data["join_error"] = "Senden der Join-Anfrage fehlgeschlagen."
         else:
-            with client_data_lock: client_view_data["join_error"] = "Nicht mit Server verbunden für Join-Anfrage."
-            response_for_js = {"success": False, "message": "Keine Serververbindung für Join-Anfrage."}
+            with client_data_lock: 
+                client_view_data["join_error"] = "Nicht mit Server verbunden für Join-Anfrage. Warte auf Verbindung..."
+                client_view_data["game_state"]["status_display"] = f"Warte auf Verbindung zu {SERVER_HOST}:{SERVER_PORT} für Join als {nickname}..."
+            response_for_js = {"success": True, "message": "Keine Serververbindung für Join-Anfrage. Warte auf automatische Verbindung..."} 
+            # True, weil der Client-Request angenommen wurde, aber die Aktion an den Server noch aussteht.
     
     with client_data_lock: 
         current_status = client_view_data.copy()
-    current_status["join_attempt_response"] = response_for_js
+        # Immer session_nickname und session_role_choice mitsenden, damit UI sie für Prefill hat
+        current_status["session_nickname"] = session.get("nickname")
+        current_status["session_role_choice"] = session.get("role_choice")
+    current_status["join_attempt_response"] = response_for_js # Gibt der UI direktes Feedback zum POST
     return jsonify(current_status)
 
 @app.route('/update_location_from_browser', methods=['POST'])
@@ -346,12 +362,16 @@ def update_location_from_browser():
         player_id_local = client_view_data.get("player_id")
         game_status_local = client_view_data.get("game_state", {}).get("status")
         socket_ok_local = client_view_data.get("is_socket_connected_to_server", False)
-        client_view_data["location"] = [lat, lon, accuracy]
+        # Location wird nur im client_view_data aktualisiert, wenn sie auch gesendet werden kann.
+        # Die Browser-Anzeige ist separat davon.
+        # client_view_data["location"] = [lat, lon, accuracy] # Nicht hier, erst wenn Server bestätigt oder für lokale Anzeige
 
     game_can_receive_loc = game_status_local in [GAME_STATE_LOBBY, GAME_STATE_HIDER_WAIT, GAME_STATE_RUNNING]
     if player_id_local and game_can_receive_loc and socket_ok_local and is_connected_to_server:
         send_success = send_message_to_server({"action": "UPDATE_LOCATION", "lat": lat, "lon": lon, "accuracy": accuracy})
-        if send_success: return jsonify({"success": True, "message": "Standort an Server gesendet."})
+        if send_success: 
+            with client_data_lock: client_view_data["location"] = [lat, lon, accuracy] # Erst bei Erfolg an Server auch lokal setzen
+            return jsonify({"success": True, "message": "Standort an Server gesendet."})
         else: return jsonify({"success": False, "message": "Senden an Server fehlgeschlagen."}), 500
     elif not player_id_local: return jsonify({"success":False, "message":"Keine Spieler-ID."}), 403
     elif not game_can_receive_loc: return jsonify({"success":False, "message":f"Status '{game_status_local}' unpassend."}), 400
@@ -361,7 +381,10 @@ def handle_generic_action(action_name, payload_key=None, payload_value_from_requ
     action_payload = {"action": action_name}; player_id_for_action = None
     with client_data_lock: player_id_for_action = client_view_data.get("player_id")
     if requires_player_id and not player_id_for_action:
-        with client_data_lock: temp_cvd = client_view_data.copy() 
+        with client_data_lock: 
+            temp_cvd = client_view_data.copy() 
+            temp_cvd["session_nickname"] = session.get("nickname")
+            temp_cvd["session_role_choice"] = session.get("role_choice")
         return jsonify({"success": False, "message": f"Aktion '{action_name}' nicht möglich (keine Spieler-ID).", **temp_cvd }), 403
     
     if payload_key:
@@ -377,10 +400,12 @@ def handle_generic_action(action_name, payload_key=None, payload_value_from_requ
     success_sent = send_message_to_server(action_payload)
     with client_data_lock:
         if success_sent: client_view_data["error_message"] = None
-        # Stelle sicher, dass aktuelle Server-Infos in der Antwort sind
         client_view_data["current_server_host"] = SERVER_HOST
         client_view_data["current_server_port"] = SERVER_PORT
-        response_data = client_view_data.copy(); response_data["action_send_success"] = success_sent
+        response_data = client_view_data.copy(); 
+        response_data["action_send_success"] = success_sent
+        response_data["session_nickname"] = session.get("nickname")
+        response_data["session_role_choice"] = session.get("role_choice")
     return jsonify(response_data)
 
 @app.route('/confirm_lobby_join', methods=['POST'])
@@ -399,13 +424,15 @@ def leave_game_and_go_to_join_screen_route():
     action_sent_successfully = False
     message_to_user = "Versuche, Spiel zu verlassen..."
     
-    session.pop("nickname", None) 
-    session.pop("role_choice", None)
-
+    original_player_id_if_any = None
     with client_data_lock:
         original_player_id_if_any = client_view_data.get("player_id")
+    
+    # Session-Daten erst löschen, wenn der Server bestätigt hat oder der Spieler sowieso raus ist.
+    # Hier aber schon mal UI-Daten zurücksetzen.
+    with client_data_lock:
         client_view_data.update({
-            "player_id": None, "player_name": None, "role": None,
+            "player_id": None, "player_name": None, "role": None, # Wichtig: Resettet den Join-Versuch
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
             "power_ups_available": [], "game_message": None, "error_message": None, 
@@ -415,21 +442,26 @@ def leave_game_and_go_to_join_screen_route():
         })
         
         if "game_state" in client_view_data and client_view_data["game_state"] is not None:
-            client_view_data["game_state"]["status"] = GAME_STATE_LOBBY 
-            client_view_data["game_state"]["status_display"] = "Warte auf Server für Join-Screen..."
+            client_view_data["game_state"]["status"] = GAME_STATE_LOBBY # Oder "disconnected" wenn keine Verbindung
+            client_view_data["game_state"]["status_display"] = "Zurück zum Beitrittsbildschirm..."
             client_view_data["game_state"]["game_over_message"] = None 
 
     # Nur LEAVE_GAME senden, wenn der Spieler tatsächlich eine ID hatte
     if original_player_id_if_any and send_message_to_server({"action": "LEAVE_GAME_AND_GO_TO_JOIN"}):
         action_sent_successfully = True
-        message_to_user = "Anfrage zum Verlassen an Server gesendet."
+        message_to_user = "Anfrage zum Verlassen an Server gesendet. Du bist nun ausgeloggt."
+        session.pop("nickname", None) # Erfolgreich beim Server abgemeldet, lokale Session kann weg
+        session.pop("role_choice", None)
         with client_data_lock: client_view_data["game_message"] = message_to_user 
-    elif original_player_id_if_any: # ID war da, aber Senden fehlgeschlagen
-        message_to_user = "Konnte Verlassen-Anfrage nicht an Server senden. Prüfe Verbindung."
+    elif original_player_id_if_any: 
+        message_to_user = "Konnte Verlassen-Anfrage nicht an Server senden. Clientseitig zurückgesetzt. Prüfe Verbindung."
+        # Session nicht löschen, da Server nicht informiert wurde.
         with client_data_lock: client_view_data["error_message"] = message_to_user
-    else: # Keine Spieler-ID, also nichts zu senden
-        action_sent_successfully = True # Im Sinne von "Aktion clientseitig ausgeführt"
+    else: 
+        action_sent_successfully = True 
         message_to_user = "Client zurückgesetzt zum Join-Screen."
+        session.pop("nickname", None) # Keine ID, also auch lokale Session zurücksetzen
+        session.pop("role_choice", None)
         with client_data_lock: client_view_data["game_message"] = message_to_user
 
 
@@ -441,6 +473,8 @@ def leave_game_and_go_to_join_screen_route():
             "sent_successfully": action_sent_successfully,
             "message": message_to_user
         }
+        response_payload["session_nickname"] = session.get("nickname") # Sende aktuellen Session-Status mit
+        response_payload["session_role_choice"] = session.get("role_choice")
     return jsonify(response_payload)
 
 @app.route('/request_early_round_end_action', methods=['POST'])
@@ -451,10 +485,11 @@ def request_early_round_end_action_route():
 if __name__ == '__main__':
     print("Hide and Seek Client startet...")
     with client_data_lock: 
+        client_view_data["game_state"]["status"] = "disconnected"
         client_view_data["game_state"]["status_display"] = "Initialisiere Client Flask-App..."
         client_view_data["is_socket_connected_to_server"] = False
-        client_view_data["current_server_host"] = SERVER_HOST # Sicherstellen
-        client_view_data["current_server_port"] = SERVER_PORT # Sicherstellen
+        client_view_data["current_server_host"] = SERVER_HOST 
+        client_view_data["current_server_port"] = SERVER_PORT 
     threading.Thread(target=network_communication_thread, daemon=True).start()
     print("CLIENT: Network Communication Thread gestartet.")
     print(f"Flask Webserver startet auf http://0.0.0.0:{FLASK_PORT}")
