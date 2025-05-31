@@ -1,4 +1,4 @@
-# Hide and Seek - Das reale Multiplayer-Spiel mit Smartphones
+# Hide and Seek: reales Multiplayer-Spiel mit Smartphones
 
 Willkommen zum Client für das "Hide and Seek" Multiplayer-Spiel! Dieses Projekt ermöglicht es dir, das klassische Versteckspiel in der realen Welt mit deinen Freunden zu spielen, wobei jeder sein Smartphone benutzt.
 
