@@ -25,7 +25,7 @@ read -r
 
 # --- Wichtige Einstellungen (bitte vorab anpassen!) ---
 # !!! ÄNDERE DIESE ZEILE ZU DEINEM AKTUELLEN GITHUB REPOSITORY !!!
-# Beispiel: GITHUB_REPO_URL="https://github.com/DeinUsername/DeinCoolesSpiel.git"
+# Beispiel: GITHUB_REPO_URL="https://github.com/thelucyinside/hideandseek.git"
 GITHUB_REPO_URL="https://github.com/DEIN_BENUTZERNAME/DEIN_REPOSITORYNAME.git" # <--- HIER DEINE URL EINTRAGEN!
 
 GAME_INSTALL_DIR="$HOME/hide-and-seek-client" # Wo das Spiel gespeichert wird
