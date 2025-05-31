@@ -3,7 +3,7 @@
 Willkommen zum Client für das "Hide and Seek" Multiplayer-Spiel! Dieses Projekt ermöglicht es dir, das klassische Versteckspiel in der realen Welt mit deinen Freunden zu spielen, wobei jeder sein Smartphone benutzt.
 
 <!-- Optional: Füge hier einen Link zu einem Screenshot oder Logo ein, wenn du eines hast -->
-<!-- Beispiel: ![Hide and Seek Logo](/logo.png) -->
+<!-- Beispiel: ![Hide and Seek Logo](https://raw.githubusercontent.com/Thelucyinside/HideandSeek/refs/heads/main/static/icon-512x512.png) -->
 
 ## Spielkonzept (Kurzfassung)
 
@@ -29,13 +29,12 @@ Die Installation ist super einfach! Du brauchst nur die [Termux App](https://f-d
 2.  **Kopiere den folgenden Befehl vollständig**, füge ihn in Termux ein und drücke Enter:
 
     ```bash
-    curl -L https://raw.githubusercontent.com/DEIN_BENUTZERNAME/DEIN_REPOSITORYNAME/main/install_hide_and_seek_client.sh | bash
+    curl -L https://raw.github.com/Thelucyinside/HideandSeek/main/install_hide_and_seek_client.sh | bash
     ```
-    *(**Hinweis für den Entwickler:** Ersetze `DEIN_BENUTZERNAME/DEIN_REPOSITORYNAME/main` durch den korrekten Pfad zu deinem `install_hide_and_seek_client.sh` Skript! Stelle sicher, dass der Branch-Name (`main` oder `master`) korrekt ist.)*
 
 3.  **Folge den Anweisungen des Installationsskripts.** Es wird dich durch den Prozess führen.
 
 Nach der Installation kannst du das Spiel jederzeit mit folgendem Befehl in Termux starten:
 
 ```bash
-hide-and-seek
+start
