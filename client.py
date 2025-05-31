@@ -170,7 +170,7 @@ def network_communication_thread():
                     msg_type = message.get("type")
 
                     if msg_type == "game_update": # Haupt-Update vom Server
-                        # Logik für Server-seitigen Spieler-Reset (z.B. nach LEAVE_GAME)
+                        # Logik für Server-seitigen Spieler-Reset (z.B. nach LEAVE_GAME oder SERVER_RESET)
                         if "player_id" in message and message["player_id"] is None and client_view_data["player_id"] is not None:
                             print("CLIENT NET: Player_id wurde vom Server auf null gesetzt. Client wird zurückgesetzt.")
                             client_view_data["player_id"] = None
@@ -178,6 +178,7 @@ def network_communication_thread():
                             client_view_data["role"] = None
                             client_view_data["confirmed_for_lobby"] = False
                             client_view_data["player_is_ready"] = False
+                            # Behalte Session-Daten für Nickname/Rolle für das nächste Join-Formular
                         
                         elif "player_id" in message and message["player_id"] is not None:
                             client_view_data["player_id"] = message["player_id"]; client_view_data["join_error"] = None
@@ -190,11 +191,16 @@ def network_communication_thread():
                             "hider_locations", "power_ups_available", "hider_location_update_imminent",
                             "early_end_requests_count", "total_active_players_for_early_end",
                             "player_has_requested_early_end",
-                            "task_skips_available" # NEU: Aufgaben-Skips
+                            "task_skips_available" 
                         ]
                         for key in update_keys:
                             if key in message: client_view_data[key] = message[key]
                         
+                        # Wenn der Server einen Reset durchgeführt hat, kann eine Fehlermeldung mitkommen
+                        if message.get("error_message") and message["player_id"] is None:
+                            client_view_data["error_message"] = message["error_message"]
+                            client_view_data["join_error"] = message["error_message"] # Auch als Join-Error anzeigen
+
                     elif msg_type == "server_text_notification": # Allgemeine Server-Benachrichtigung (via Termux)
                         game_msg_text = message.get("message", "Server Nachricht")
                         show_termux_notification(title="Hide and Seek Info", content=game_msg_text, notification_id="server_info")
@@ -219,16 +225,11 @@ def network_communication_thread():
                         elif event_name == "game_started":
                             show_termux_notification(title="Hide and Seek", content="Das Spiel hat begonnen!", notification_id="game_start")
                         
-                        # Die folgenden Events werden vom Server nicht mehr gesendet,
-                        # aber der Code bleibt hier, falls sie reaktiviert werden.
-                        elif event_name == "hider_disqualified_loc": 
-                            player_name = message.get("player_name", "Ein Hider")
-                            show_termux_notification(title="Hide and Seek", content=f"Hider {player_name} disqualifiziert (kein Standort).", notification_id="hider_disq_loc")
 
                     elif msg_type == "error": # Fehlermeldungen vom Server
                         error_text = message.get("message", "Unbekannter Fehler vom Server")
                         client_view_data["error_message"] = error_text
-                        critical_errors = ["Spiel läuft bereits", "Spiel voll", "Nicht authentifiziert", "Bitte neu beitreten", "Du bist nicht mehr Teil des aktuellen Spiels"]
+                        critical_errors = ["Spiel läuft bereits", "Spiel voll", "Nicht authentifiziert", "Bitte neu beitreten", "Du bist nicht mehr Teil des aktuellen Spiels", "Server wurde von einem Spieler zurückgesetzt"]
                         if any(crit_err in error_text for crit_err in critical_errors):
                             client_view_data["join_error"] = error_text # Spezifischer Join-Fehler
                             if client_view_data["player_id"] is not None: # Wenn eine ID existierte, Client-Seite zurücksetzen
@@ -353,7 +354,7 @@ def join_game_route():
             "power_ups_available": [], "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
             "player_has_requested_early_end": False,
-            "task_skips_available": 0 # NEU: Skips werden beim Join zurückgesetzt
+            "task_skips_available": 0 
         })
         # Sicherstellen, dass game_state existiert
         if "game_state" not in client_view_data or client_view_data["game_state"] is None: 
@@ -435,34 +436,36 @@ def handle_generic_action(action_name, payload_key=None, payload_value_from_requ
     Generische Funktion zur Verarbeitung von Client-Aktionen.
     Leitet Anfragen von der UI an den Spielserver weiter.
     """
-    action_payload = {"action": action_name}; player_id_for_action = None
-    with client_data_lock: player_id_for_action = client_view_data.get("player_id")
-    # Prüfen, ob eine Spieler-ID erforderlich und vorhanden ist
-    if requires_player_id and not player_id_for_action:
-        with client_data_lock: 
-            temp_cvd = client_view_data.copy() 
-            temp_cvd["session_nickname"] = session.get("nickname")
-            temp_cvd["session_role_choice"] = session.get("role_choice")
-        return jsonify({"success": False, "message": f"Aktion '{action_name}' nicht möglich (keine Spieler-ID).", **temp_cvd }), 403
+    action_payload = {"action": action_name}; player_id_for_action = None # Wird nur gesetzt, wenn requires_player_id True ist
     
-    # Payload-Daten aus der Request-Body extrahieren, falls vorhanden
+    if requires_player_id:
+        with client_data_lock: player_id_for_action = client_view_data.get("player_id")
+        if not player_id_for_action:
+            with client_data_lock: 
+                temp_cvd = client_view_data.copy() 
+                temp_cvd["session_nickname"] = session.get("nickname")
+                temp_cvd["session_role_choice"] = session.get("role_choice")
+            return jsonify({"success": False, "message": f"Aktion '{action_name}' nicht möglich (keine Spieler-ID).", **temp_cvd }), 403
+    
     if payload_key:
         req_data = request.get_json()
-        if req_data is None and payload_key != "ready_status": # ready_status ist bool, muss nicht unbedingt JSON sein
+        if req_data is None and payload_key != "ready_status": 
              return jsonify({"success": False, "message": "Keine JSON-Daten im Request-Body."}), 400
         val_from_req = req_data.get(payload_value_from_request or payload_key) if req_data else None
         if payload_key == "ready_status":
              if not isinstance(val_from_req, bool): return jsonify({"success": False, "message": "Ungültiger Wert für ready_status (muss boolean sein).)"}), 400
-        elif val_from_req is None: return jsonify({"success": False, "message": f"Fehlender Wert für '{payload_key}' im Request-Body."}), 400
-        action_payload[payload_key] = val_from_req
+        elif val_from_req is None and payload_key != "force_server_reset": # force_server_reset braucht keinen Payload-Wert
+            return jsonify({"success": False, "message": f"Fehlender Wert für '{payload_key}' im Request-Body."}), 400
+        if val_from_req is not None or payload_key != "force_server_reset": # Nur setzen, wenn Wert da ist oder nicht force_server_reset
+            action_payload[payload_key] = val_from_req
     
-    success_sent = send_message_to_server(action_payload) # Nachricht an Server senden
+    success_sent = send_message_to_server(action_payload) 
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None # Fehler löschen bei Erfolg
-        client_view_data["current_server_host"] = SERVER_HOST # UI-Status aktualisieren
+        if success_sent: client_view_data["error_message"] = None 
+        client_view_data["current_server_host"] = SERVER_HOST 
         client_view_data["current_server_port"] = SERVER_PORT
         response_data = client_view_data.copy(); 
-        response_data["action_send_success"] = success_sent # Information über Sendeerfolg
+        response_data["action_send_success"] = success_sent 
         response_data["session_nickname"] = session.get("nickname")
         response_data["session_role_choice"] = session.get("role_choice")
     return jsonify(response_data)
@@ -501,7 +504,6 @@ def leave_game_and_go_to_join_screen_route():
     with client_data_lock:
         original_player_id_if_any = client_view_data.get("player_id")
     
-    # Client-Seite sofort zurücksetzen, um UI zu aktualisieren
     with client_data_lock:
         client_view_data.update({
             "player_id": None, "player_name": None, "role": None,
@@ -511,7 +513,7 @@ def leave_game_and_go_to_join_screen_route():
             "join_error": None, "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
             "player_has_requested_early_end": False,
-            "task_skips_available": 0 # NEU: Skips zurücksetzen beim Verlassen
+            "task_skips_available": 0 
         })
         
         if "game_state" in client_view_data and client_view_data["game_state"] is not None:
@@ -519,18 +521,16 @@ def leave_game_and_go_to_join_screen_route():
             client_view_data["game_state"]["status_display"] = "Zurück zum Beitrittsbildschirm..."
             client_view_data["game_state"]["game_over_message"] = None 
 
-    # Nur an den Server senden, wenn der Spieler tatsächlich eine ID hatte
     if original_player_id_if_any and send_message_to_server({"action": "LEAVE_GAME_AND_GO_TO_JOIN"}):
         action_sent_successfully = True
         message_to_user = "Anfrage zum Verlassen an Server gesendet. Du bist nun ausgeloggt."
-        session.pop("nickname", None) # Session-Daten löschen, da erfolgreich abgemeldet
+        session.pop("nickname", None) 
         session.pop("role_choice", None)
         with client_data_lock: client_view_data["game_message"] = message_to_user 
-    elif original_player_id_if_any: # Spieler hatte ID, konnte aber nicht senden
+    elif original_player_id_if_any: 
         message_to_user = "Konnte Verlassen-Anfrage nicht an Server senden. Clientseitig zurückgesetzt. Prüfe Verbindung."
-        # Session nicht löschen, da Server nicht informiert wurde, könnte er noch als verbunden gelten
         with client_data_lock: client_view_data["error_message"] = message_to_user
-    else: # Spieler hatte gar keine ID (war schon nicht verbunden)
+    else: 
         action_sent_successfully = True 
         message_to_user = "Client zurückgesetzt zum Join-Screen (war nicht aktiv im Spiel)."
         session.pop("nickname", None) 
@@ -555,15 +555,21 @@ def request_early_round_end_action_route():
     """ Route für die Anfrage eines frühen Rundenendes. """
     return handle_generic_action("REQUEST_EARLY_ROUND_END")
 
-@app.route('/skip_task', methods=['POST']) # NEUE ROUTE FÜR AUFGABEN-SKIP
+@app.route('/skip_task', methods=['POST']) 
 def skip_task_route():
     """ Route für die Aufgaben-Skip-Funktion des Hiders. """
     return handle_generic_action("SKIP_TASK")
 
+@app.route('/force_server_reset_from_ui', methods=['POST']) # NEUE ROUTE FÜR SERVER-RESET
+def force_server_reset_route():
+    """ Route für den erzwungenen Server-Reset durch einen Client (UI-Button). """
+    # Diese Aktion erfordert keine player_id, da sie global wirken soll.
+    # Es wird keine payload_key oder payload_value_from_request benötigt.
+    return handle_generic_action("FORCE_SERVER_RESET_FROM_CLIENT", requires_player_id=False)
+
 
 if __name__ == '__main__':
     print("Hide and Seek Client startet...")
-    # Initialisiere client_view_data beim Start des Skripts
     with client_data_lock: 
         client_view_data["game_state"]["status"] = "disconnected"
         client_view_data["game_state"]["status_display"] = "Initialisiere Client Flask-App..."
@@ -571,11 +577,8 @@ if __name__ == '__main__':
         client_view_data["current_server_host"] = SERVER_HOST 
         client_view_data["current_server_port"] = SERVER_PORT 
     
-    # Starte den Netzwerk-Kommunikations-Thread als Daemon (läuft im Hintergrund, beendet sich mit Hauptprogramm)
     threading.Thread(target=network_communication_thread, daemon=True).start()
     print("CLIENT: Network Communication Thread gestartet.")
     
-    # Starte den Flask Webserver
     print(f"Flask Webserver startet auf http://0.0.0.0:{FLASK_PORT}")
-    # debug=False für den Produktionseinsatz
     app.run(host='0.0.0.0', port=FLASK_PORT, debug=False)
