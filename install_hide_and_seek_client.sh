@@ -89,7 +89,7 @@ if [ -d "$GAME_INSTALL_DIR" ]; then
     fi
 fi
 
-git clone "$GITHUB_REPO_URL" "$GAME_INSTALL_DIR" || handle_error "Konnte das Spiel nicht von GitHub herunterladen. Ist die Internetverbindung okay? Stimmt die Adresse im Skript ($GITHUB_REPO_URL)?"
+git clone "$GITHUB_REPO_URL" -b feature/join-anytime "$GAME_INSTALL_DIR" || handle_error "Konnte das Spiel nicht von GitHub herunterladen. Ist die Internetverbindung okay? Stimmt die Adresse im Skript ($GITHUB_REPO_URL)?"
 cd "$GAME_INSTALL_DIR" || handle_error "Konnte nicht in den heruntergeladenen Spielordner wechseln."
 
 # Überprüfen, ob die wichtigen Dateien da sind
