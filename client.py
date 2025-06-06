@@ -114,9 +114,37 @@ def network_communication_thread():
                 buffer = ""
                 with client_data_lock:
                     client_view_data["is_socket_connected_to_server"] = True
-                    client_view_data["error_message"] = None; client_view_data["join_error"] = None 
-                    if client_view_data["game_state"].get("status") == "disconnected": 
-                         client_view_data["game_state"]["status_display"] = "Verbunden. Warte auf Spielbeitritt..."
+                    client_view_data["error_message"] = None # Clear previous errors
+                    client_view_data["join_error"] = None   # Clear previous join errors
+
+                    current_player_id = client_view_data.get("player_id")
+                    current_player_name = client_view_data.get("player_name")
+
+                    if current_player_id and current_player_name:
+                        # Attempt to rejoin if we have an existing player identity
+                        client_view_data["game_state"]["status_display"] = f"Verbunden mit {SERVER_HOST}:{SERVER_PORT}. Re-synchronisiere als {current_player_name}..."
+                        rejoin_payload = {
+                            "action": "REJOIN_GAME",
+                            "player_id": current_player_id,
+                            "name": current_player_name
+                        }
+                        try:
+                            if server_socket_global: # Ensure socket is still valid
+                                server_socket_global.sendall(json.dumps(rejoin_payload).encode('utf-8') + b'\n')
+                                print(f"CLIENT REJOIN: Sent REJOIN_GAME for Player ID: {current_player_id}, Name: {current_player_name}")
+                            else:
+                                # This case should ideally not be hit if connect just succeeded and assigned to server_socket_global
+                                print(f"CLIENT REJOIN (ERROR): server_socket_global is None before sending REJOIN_GAME for Player ID: {current_player_id}.")
+                                raise OSError("Socket not available for REJOIN_GAME")
+                        except Exception as e:
+                            print(f"CLIENT REJOIN (ERROR): Failed to send REJOIN_GAME for Player ID: {current_player_id} to {SERVER_HOST}:{SERVER_PORT}. Error: {e}")
+                            is_connected_to_server = False
+                            client_view_data["is_socket_connected_to_server"] = False
+                            client_view_data["game_state"]["status_display"] = f"Rejoin-Anfrage an {SERVER_HOST}:{SERVER_PORT} fehlgeschlagen."
+                            # The main loop will then try to reconnect.
+                    elif client_view_data["game_state"].get("status") == "disconnected" or not client_view_data.get("player_id"):
+                        # Fresh connection, or player_id was cleared (e.g. by changing server)
+                        client_view_data["game_state"]["status_display"] = f"Verbunden mit {SERVER_HOST}:{SERVER_PORT}. Warte auf Spielbeitritt..."
             except socket.timeout:
                 with client_data_lock: client_view_data["game_state"]["status_display"] = f"Verbindung zu {current_host_to_connect}:{current_port_to_connect} Zeitüberschreitung."
                 time.sleep(3); continue
@@ -254,16 +282,44 @@ def join_game_route():
             SERVER_HOST, SERVER_PORT = new_server_host, new_server_port
             client_view_data["current_server_host"], client_view_data["current_server_port"] = SERVER_HOST, SERVER_PORT
             server_details_changed = True
-        
+
+            # If server details changed, we MUST clear the old player identity
+            # to prevent REJOIN_GAME (from network_communication_thread) to a new server with an old ID.
+            # This also ensures a fresh context for the new server.
+            client_view_data["player_id"] = None
+            client_view_data["player_name"] = None # Clear name associated with the old session
+            client_view_data["role"] = None        # Clear role associated with the old session
+            client_view_data["confirmed_for_lobby"] = False
+            client_view_data["player_is_ready"] = False
+            # Reset other game-specific states that might be tied to the old session
+            client_view_data["current_task"] = None
+            client_view_data["hider_leaderboard"] = []
+            client_view_data["hider_locations"] = {}
+            client_view_data["task_skips_available"] = 0
+            client_view_data["game_message"] = None # Clear old messages
+            # error_message and join_error are handled later or by the network thread
+            print(f"CLIENT JOIN_GAME: Server details changed to {SERVER_HOST}:{SERVER_PORT}. Cleared old player session data for fresh join.")
+
+        # This update then correctly uses the nickname and role from the form for the new join context.
+        # player_id is explicitly set to None here, which is correct for a new join action.
         client_view_data.update({
-            "player_id": None, "player_name": nickname, "role": role_choice,
-            "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
-            "join_error": None, "error_message": None, "game_message": None,
-            "current_task": None, "hider_leaderboard": [], "hider_locations": {},
-            # "power_ups_available" wurde entfernt
+            "player_id": None,
+            "player_name": nickname, # Nickname from the current join form
+            "role": role_choice,     # Role from the current join form
+            "confirmed_for_lobby": False, # Reset for new join
+            "player_is_ready": False,     # Reset for new join
+            "player_status": "active",
+            "join_error": None, # Clear previous join errors before attempting new join
+            "error_message": None, # Clear general errors
+            "game_message": None,
+            "current_task": None,
+            "hider_leaderboard": [],
+            "hider_locations": {},
             "hider_location_update_imminent": False,
-            "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0 
+            "early_end_requests_count": 0,
+            "total_active_players_for_early_end": 0,
+            "player_has_requested_early_end": False,
+            "task_skips_available": 0
         })
         if "game_state" not in client_view_data or client_view_data["game_state"] is None: 
             client_view_data["game_state"] = {"status": "disconnected", "status_display": "Initialisiere..."}
@@ -279,27 +335,52 @@ def join_game_route():
         else: client_view_data["game_state"]["status_display"] = f"Sende Beitrittsanfrage als {nickname}..."
     
     response_for_js = {"success": True, "message": "Beitrittsanfrage wird verarbeitet."}
-    if server_details_changed:
-        response_for_js = {"success": True, "message": "Serveradresse geändert. Verbindung wird neu aufgebaut."}
-    else:
-        socket_conn_ok = False
-        with client_data_lock: socket_conn_ok = client_view_data.get("is_socket_connected_to_server", False)
-        if socket_conn_ok and is_connected_to_server:
-            if not send_message_to_server({"action": "JOIN_GAME", "name": nickname, "role": role_choice}):
-                response_for_js = {"success": False, "message": "Senden der Join-Anfrage fehlgeschlagen."}
-                with client_data_lock: client_view_data["join_error"] = "Senden der Join-Anfrage fehlgeschlagen."
+    # Attempt to send JOIN_GAME if connected, or let network_communication_thread handle connection
+    if is_connected_to_server and server_socket_global:
+        payload = {
+            "action": "JOIN_GAME",
+            "name": nickname,
+            "role_preference": role_choice
+            # player_id is not sent here; server assigns it on successful JOIN_GAME
+        }
+        success, message = send_message_to_server(payload)
+        if not success:
+            with client_data_lock:
+                client_view_data["join_error"] = message if message else "Fehler beim Senden der Beitrittsanfrage."
+            return jsonify({"success": False, "message": client_view_data["join_error"]}), 500
         else:
-            with client_data_lock: 
-                client_view_data["join_error"] = "Nicht mit Server verbunden. Warte auf Verbindung..."
-                client_view_data["game_state"]["status_display"] = f"Warte auf Verbindung zu {SERVER_HOST}:{SERVER_PORT} für Join als {nickname}..."
-            response_for_js = {"success": True, "message": "Keine Serververbindung. Warte auf automatische Verbindung..."} 
-            
-    with client_data_lock: 
-        current_status = client_view_data.copy()
-        current_status["session_nickname"] = session.get("nickname")
-        current_status["session_role_choice"] = session.get("role_choice")
-    current_status["join_attempt_response"] = response_for_js
-    return jsonify(current_status)
+            with client_data_lock:
+                 client_view_data["game_state"]["status_display"] = f"Beitrittsanfrage an {SERVER_HOST}:{SERVER_PORT} gesendet. Warte auf Antwort..."
+            return jsonify({"success": True, "message": "Beitrittsanfrage gesendet. Warte auf Server-Antwort."})
+
+    # If not connected, or if server details just changed:
+    # The network_communication_thread is responsible for establishing the connection.
+    # If server_details_changed, it will connect to the new server.
+    # The user might see a "Connecting..." message and then the UI should reflect the new state.
+    # A JOIN_GAME is an explicit user action. If the connection isn't ready at the moment of this action,
+    # the user might need to click "Join" again once connected.
+    # The REJOIN_GAME logic in network_communication_thread handles automatic re-synchronization if a player_id exists
+    # for the *current* server, upon re-establishing a connection.
+    else:
+        status_message = f"Verbindung zu {SERVER_HOST}:{SERVER_PORT} wird hergestellt..."
+        if server_details_changed:
+            status_message = f"Serverdetails geändert. Verbindung zu {SERVER_HOST}:{SERVER_PORT} wird hergestellt. Bitte nach Verbindung erneut beitreten."
+        else: # Not connected, server details same
+            status_message = f"Nicht mit {SERVER_HOST}:{SERVER_PORT} verbunden. Verbindung wird versucht. Bitte nach erfolgreicher Verbindung erneut beitreten."
+
+        with client_data_lock:
+            # Update status display to inform user
+            client_view_data["game_state"]["status_display"] = status_message
+            # Ensure player_name and role are stored so if user clicks join again, or for context
+            client_view_data["player_name"] = nickname
+            client_view_data["role"] = role_choice
+            if not server_details_changed: # Only set join_error if it's not a server change scenario
+                 client_view_data["join_error"] = "Nicht mit dem Server verbunden. Bitte warten Sie auf die Verbindung und versuchen Sie es erneut."
+
+        print(f"CLIENT JOIN_GAME: Nicht verbunden oder Serverdetails geändert. Status: {status_message}")
+        # Return 202 to indicate the request is accepted but processing (connection) is pending.
+        # The client-side JS should handle this by not assuming immediate success and relying on polling /game_data.
+        return jsonify({"success": False, "message": status_message}), 202
 
 @app.route('/update_location_from_browser', methods=['POST'])
 def update_location_from_browser():

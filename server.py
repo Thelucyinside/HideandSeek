@@ -506,6 +506,72 @@ def handle_client_connection(conn, addr):
                                 broadcast_full_game_state_to_all(exclude_pid=player_id)
                                 continue
                         
+                        elif action == "REJOIN_GAME":
+                            rejoin_player_id = message.get("player_id")
+                            rejoin_player_name = message.get("name")
+                            action_for_log = f"REJOIN_GAME (Attempt ID: {rejoin_player_id}, Name: {rejoin_player_name})"
+                            print(f"SERVER RECV: {action_for_log} from {addr}")
+
+                            if player_id is None: # Crucial: Only allow REJOIN if this socket isn't yet tied to a player
+                                with data_lock:
+                                    found_player_to_rejoin = False
+                                    if rejoin_player_id and rejoin_player_id in game_data.get("players", {}):
+                                        player_entry = game_data["players"][rejoin_player_id]
+
+                                        # Optional: Name check for extra verification, can be logged if mismatched
+                                        if player_entry.get("name") != rejoin_player_name:
+                                            print(f"SERVER REJOIN WARN: Name mismatch for ID {rejoin_player_id}. Client sent '{rejoin_player_name}', server has '{player_entry.get('name')}'. Proceeding with ID.")
+
+                                        # Close old connection if it exists and is different from the current one
+                                        old_conn = player_entry.get("client_conn")
+                                        if old_conn and old_conn != conn:
+                                            print(f"SERVER REJOIN: Closing old/stale connection for player {rejoin_player_id}.")
+                                            try:
+                                                old_conn.close()
+                                            except Exception as e_close:
+                                                print(f"SERVER REJOIN (ERROR): Error closing old connection for {rejoin_player_id}: {e_close}")
+
+                                        player_entry["client_conn"] = conn
+                                        player_entry["addr"] = addr # Update address to the new one
+                                        player_entry["last_seen"] = time.time()
+
+                                        # Associate this handler instance with the rejoining player_id
+                                        player_id = rejoin_player_id
+                                        player_name_for_log = player_entry.get("name", rejoin_player_name) # Update log name
+                                        found_player_to_rejoin = True
+
+                                        print(f"SERVER REJOIN: Successfully re-associated player {player_name_for_log} ({player_id}) with new connection from {addr}")
+
+                                        # If player was marked as waiting_for_lobby, this state is preserved.
+                                        # send_data_to_one_client will correctly reflect this.
+                                        # No specific change needed for player_entry["is_waiting_for_lobby"] here.
+
+                                        # Send current game state immediately to the rejoining client
+                                        send_data_to_one_client(conn, player_id)
+                                        # Broadcast to all, as player's online status might implicitly change for others
+                                        # or if their previous disconnect was noted.
+                                        broadcast_full_game_state_to_all(exclude_pid=player_id)
+
+                                    if not found_player_to_rejoin:
+                                        print(f"SERVER REJOIN (FAIL): Player ID '{rejoin_player_id}' not found for rejoin attempt from {addr}.")
+                                        try:
+                                            error_payload = {
+                                                "type": "error",
+                                                "message": f"Rejoin fehlgeschlagen. Spieler-ID '{rejoin_player_id}' nicht gefunden. Bitte ggf. neu beitreten.",
+                                                "join_error": f"Rejoin fehlgeschlagen. Spieler-ID '{rejoin_player_id}' nicht gefunden."
+                                                # Adding join_error to potentially guide UI
+                                            }
+                                            conn.sendall(json.dumps(error_payload).encode('utf-8') + b'\n')
+                                        except Exception as e_send_err:
+                                            print(f"SERVER REJOIN (ERROR): Could not send 'player not found' error to {addr}: {e_send_err}")
+                                        # Connection will likely be closed by client or eventually by server if no valid actions are sent.
+                            else:
+                                # This socket connection is already associated with player_id. REJOIN is unexpected.
+                                print(f"SERVER REJOIN (WARN): Received REJOIN_GAME from already authenticated player {player_name_for_log} ({player_id}) on connection {addr}. Ignoring REJOIN, sending current state.")
+                                send_data_to_one_client(conn, player_id) # Send current state as a general response
+
+                            continue # End of REJOIN_GAME action, process next message or wait.
+
                         elif action == "FORCE_SERVER_RESET_FROM_CLIENT":
                             client_name_for_reset_log = player_name_for_log if player_id else f"Client {addr[0]}:{addr[1]}"
                             print(f"SERVER: {client_name_for_reset_log} hat Server-Reset (FORCE_SERVER_RESET_FROM_CLIENT) angefordert.")
@@ -519,11 +585,14 @@ def handle_client_connection(conn, addr):
                             except Exception as e: pass
                             return
 
+                        # This check should now be AFTER JOIN_GAME and REJOIN_GAME attempts for unauthenticated sockets
                         if not player_id or player_id not in game_data.get("players", {}):
+                            # ... existing logic for unauthenticated/removed players ...
                             try: conn.sendall(json.dumps({"type":"error", "message":"Nicht authentifiziert oder aus Spiel entfernt."}).encode('utf-8') + b'\n')
-                            except: pass
-                            return
+                            except: pass # Ignore if send fails, connection likely dead
+                            return # End this handler thread as it's not associated with a valid player
                         
+                        # All actions below this point assume player_id is valid and associated with this connection
                         current_player_data = game_data["players"][player_id]
                         current_player_data["last_seen"] = time.time()
                         if current_player_data.get("client_conn") != conn:
