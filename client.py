@@ -663,6 +663,14 @@ def skip_task_route(): return handle_generic_action("SKIP_TASK")
 # requires_player_id=False, da dies von jedem Client (auch unregistrierten) gesendet werden kann
 def force_server_reset_route(): return handle_generic_action("FORCE_SERVER_RESET_FROM_CLIENT", requires_player_id=False)
 
+@app.route('/return_to_registration', methods=['POST'])
+def return_to_registration_route():
+    """
+    Signalisiert dem Server, dass der Spieler zur Registrierung zurückkehren möchte.
+    Die Server-Antwort wird den Client-Status so ändern, dass die UI den Registrierungsbildschirm anzeigt.
+    """
+    return handle_generic_action("RETURN_TO_REGISTRATION")
+
 @app.route('/leave_game_and_go_to_join_screen', methods=['POST'])
 def leave_game_and_go_to_join_screen_route():
     """
