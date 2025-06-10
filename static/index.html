@@ -397,12 +397,12 @@
 
         function resetDynamicUIElements() {
             // Setzt alle UI-Elemente auf ihren Standardzustand zurück (versteckt/leer)
-            document.querySelectorAll('#app-container > .container.section').forEach(el => el.classList.remove('visible'));
+            // HINWEIS: Die Sichtbarkeits-Steuerung (visible class) wird jetzt am Ende von updateUI() verwaltet.
             
             ['game-message', 'error-message', 'location-error-message', 'connect-error-message'].forEach(id => {
                 setText(id, ''); toggleDisplay(id, false);
             });
-            toggleDisplay('messages-section', false);
+            // messages-section visibility is handled in updateUI directly
 
             // Connect Sektion
             setText('connect-socket-status-display', 'Prüfe...'); $('#connect-socket-status-display').className = 'dimmed';
@@ -464,6 +464,9 @@
         function updateUI(data) {
             resetDynamicUIElements();
             currentPlayerData = JSON.parse(JSON.stringify(data));
+            
+            // NEU: Ein Set, das alle Sektionen sammelt, die am Ende sichtbar sein sollen.
+            const sectionsToMakeVisible = new Set();
 
             let messagesWereShown = false;
             if (data.is_processing_offline_queue) {
@@ -477,7 +480,7 @@
             if (data.error_message) { setText('error-message', data.error_message); toggleDisplay('error-message', true); messagesWereShown = true; setTimeout(() => { toggleDisplay('error-message', false); if(currentPlayerData) currentPlayerData.error_message = null; }, 8000); }
             const locationErrorEl = $('#location-error-message');
             if (locationErrorEl && locationErrorEl.style.display !== 'none' && locationErrorEl.textContent) messagesWereShown = true;
-            if(messagesWereShown) show('messages-section');
+            if(messagesWereShown) sectionsToMakeVisible.add('messages-section'); // 'show' wird durch Hinzufügen zum Set ersetzt
 
             const isSocketConnected = data.is_socket_connected_to_server === true;
             const hasPlayerId = !!data.player_id;
@@ -513,11 +516,11 @@
             
             // --- Haupt-Sektions-Logik basierend auf Verbindungs- und Spielerstatus ---
             if (!isSocketConnected) {
-                show('connect-section');
+                sectionsToMakeVisible.add('connect-section');
                 setText('connect-socket-status-display', serverGameStatusDisplay);
                 $('#connect-socket-status-display').className = 'status-disconnected';
             } else if (isSocketConnected && !hasPlayerId) {
-                show('lobby-section');
+                sectionsToMakeVisible.add('lobby-section');
                 toggleDisplay('lobby-registration-container', true);
                 
                 const nicknameInput = $('#lobby-nickname');
@@ -529,14 +532,13 @@
                 if (roleChoiceInput && document.activeElement !== roleChoiceInput) {
                     if (data.session_role_choice) roleChoiceInput.value = data.session_role_choice;
                 }
-                // Zeige Join-Fehler (z.B. Name vergeben) in der Lobby-Registrierung an
                 if (data.join_error) {
                     setText('error-message', data.join_error);
                     toggleDisplay('error-message', true);
-                    show('messages-section');
+                    sectionsToMakeVisible.add('messages-section');
                 }
             } else if (isSocketConnected && hasPlayerId) {
-                show('player-section');
+                sectionsToMakeVisible.add('player-section');
                 setText('player-name', data.player_name); setText('player-id', data.player_id); setText('player-role', data.role);
                 
                 let playerStatusText = data.player_status;
@@ -548,7 +550,6 @@
 
                 toggleDisplay('hider-warning-text', data.role === 'hider' && data.hider_location_update_imminent === true && data.player_status === 'active');
                 
-                // Early End Vote & Server Management
                 const canVote = (serverGameStatus === GAME_STATE_RUNNING || serverGameStatus === GAME_STATE_HIDER_WAIT) && data.player_status === 'active';
                 toggleDisplay('early-end-vote-container', canVote);
                 if (canVote) {
@@ -560,9 +561,8 @@
                 toggleDisplay('server-management-container', isSocketConnected);
                 $('#force-server-reset-button').disabled = !isSocketConnected;
 
-                // Logik basierend auf dem Spielzustand
                 if (serverGameStatus === GAME_STATE_LOBBY) {
-                    show('lobby-section');
+                    sectionsToMakeVisible.add('lobby-section');
                     toggleDisplay('lobby-main-view-container', true);
                     updateLobbyPlayerList(data.lobby_players, String(data.player_id));
                     const readyButton = $('#ready-button');
@@ -572,23 +572,22 @@
                 } else if (serverGameStatus === GAME_STATE_HIDER_WAIT) {
                     toggleDisplay('hider-wait-countdown-container', true);
                     setText('hider-wait-time-left', data.game_state?.hider_wait_time_left || '0');
-                    if (data.role === 'hider') show('hider-section');
-                    else if (data.role === 'seeker') show('seeker-section');
-                    show('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
+                    if (data.role === 'hider') sectionsToMakeVisible.add('hider-section');
+                    else if (data.role === 'seeker') sectionsToMakeVisible.add('seeker-section');
+                    sectionsToMakeVisible.add('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
                 } else if (serverGameStatus === GAME_STATE_RUNNING) {
                     toggleDisplay('game-time-left-container', true);
                     const timeLeft = data.game_state?.game_time_left || 0;
                     setText('game-time-left', `${Math.floor(timeLeft / 60)} Min ${timeLeft % 60} Sek`);
-                    if (data.role === 'hider') show('hider-section');
-                    else if (data.role === 'seeker') show('seeker-section');
-                    show('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
+                    if (data.role === 'hider') sectionsToMakeVisible.add('hider-section');
+                    else if (data.role === 'seeker') sectionsToMakeVisible.add('seeker-section');
+                    sectionsToMakeVisible.add('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
                 } else if (serverGameStatus === GAME_STATE_HIDER_WINS || serverGameStatus === GAME_STATE_SEEKER_WINS) {
-                    show('game-over-section');
+                    sectionsToMakeVisible.add('game-over-section');
                     setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
                     updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
                 }
 
-                // Sektions-spezifische Updates
                 if(data.role === 'hider') {
                     setText('hider-skips-available-display', data.task_skips_available || 0);
                     updateHiderTask(data.current_task, data.task_skips_available);
@@ -617,6 +616,15 @@
             } else {
                 stopLocationUpdates();
             }
+            
+            // NEU: Zentrale Steuerung der Sichtbarkeit am Ende der Funktion
+            document.querySelectorAll('#app-container > .container.section').forEach(section => {
+                if (sectionsToMakeVisible.has(section.id)) {
+                    section.classList.add('visible');
+                } else {
+                    section.classList.remove('visible');
+                }
+            });
         }
         
         function updateLobbyPlayerList(lobbyPlayers, currentPlayerIdStr) {
@@ -676,6 +684,14 @@
                 const precachedVisible = $('#hider-precached-tasks-container')?.style.display !== 'none';
                 toggleDisplay('hider-no-task-message', isActiveHider && !precachedVisible);
             }
+        }
+        
+        // This function is defined but not called in the provided code snippet, keeping it for completeness
+        function updateHiderStatusMessages(playerStatus) {
+            // Placeholder for any specific hider status message logic if needed in the future
+            toggleDisplay('hider-caught-message', playerStatus === 'caught');
+            toggleDisplay('hider-failed-task-message', playerStatus === 'failed_task');
+            toggleDisplay('hider-failed-location-message', playerStatus === 'failed_loc_update');
         }
 
         function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId) {
