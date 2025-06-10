@@ -89,7 +89,7 @@
             font-size: 1em;
             transition: background-color 0.2s ease;
         }
-        button:hover, input[type="submit"]:hover { background-color: #0056b3; }
+        button:hover, input[type="submit"]::hover { background-color: #0056b3; }
         button:disabled {
             background-color: #ccc;
             cursor: not-allowed;
@@ -151,6 +151,7 @@
         .status-active { color: green; font-weight: bold; }
         .status-caught { color: orange; font-weight: bold; }
         .status-failed, .status-failed-loc { color: red; font-weight: bold; }
+        .status-offline { color: #888; font-style: italic; } /* NEU: Für Offline-Status */
         /* Neu für Verbindungsstatus */
         .status-connected { color: green; font-weight: bold; }
         .status-disconnected { color: red; font-weight: bold; }
@@ -298,6 +299,15 @@
             <p id="hider-caught-message" class="error" style="display:none;">Du wurdest gefangen! Du bist jetzt ein Seeker.</p>
             <p id="hider-failed-task-message" class="error" style="display:none;">Du hast deine letzte Aufgabe nicht rechtzeitig geschafft und bist ausgeschieden.</p>
             <p id="hider-failed-location-message" class="error" style="display:none;">Standort nicht rechtzeitig aktualisiert - disqualifiziert!</p>
+
+            <!-- NEU: Abschnitt für pre-cached Aufgaben -->
+            <div id="hider-precached-tasks-container" style="display:none; margin-top:15px; padding-top:10px; border-top: 1px dashed #eee;">
+                <h4>Nächste verfügbare Aufgaben (Offline-Cache)</h4>
+                <ul id="hider-precached-tasks-list" class="player-list"></ul>
+                <p class="dimmed" style="font-size:0.85em;">Diese Aufgaben werden dir bei Bedarf zugewiesen. Zeitlimits gelten ab Server-Zuweisung.</p>
+            </div>
+
+
             <div id="hider-leaderboard-container" style="display:none;">
                 <h3>Hider Leaderboard</h3>
                 <table id="hider-leaderboard" class="leaderboard">
@@ -448,6 +458,11 @@
             const hiderTbody = $('#hider-leaderboard tbody'); if (hiderTbody) hiderTbody.innerHTML = '';
             toggleDisplay('hider-leaderboard-container', false);
 
+            // NEU: Pre-cached tasks
+            setHtml('hider-precached-tasks-list', '');
+            toggleDisplay('hider-precached-tasks-container', false);
+
+
             // Seeker Sektion
             setHtml('seeker-hider-list', ''); toggleDisplay('seeker-no-hiders-message', true);
             const seekerHiderContainer = $('#seeker-hider-locations-container'); if(seekerHiderContainer) toggleDisplay(seekerHiderContainer.id, true);
@@ -469,7 +484,17 @@
 
             let messagesWereShown = false;
             // Nachrichten vom Server anzeigen
-            if (data.game_message) { setText('game-message', data.game_message); toggleDisplay('game-message', true); messagesWereShown = true; setTimeout(() => { toggleDisplay('game-message', false); if(currentPlayerData) currentPlayerData.game_message = null; }, 5000); }
+            // NEU: Logik für Offline-Queue-Verarbeitung und spezifische Nachricht
+            if (data.is_processing_offline_queue) {
+                setText('game-message', 'Synchronisiere Offline-Aktionen mit dem Server...');
+                toggleDisplay('game-message', true); messagesWereShown = true;
+            } else if (data.game_message && data.game_message.includes("Alle Offline-Aktionen erfolgreich synchronisiert.")) {
+                setText('game-message', data.game_message); toggleDisplay('game-message', true); messagesWereShown = true;
+                setTimeout(() => { toggleDisplay('game-message', false); if(currentPlayerData) currentPlayerData.game_message = null; }, 4000); // Länger anzeigen
+            } else if (data.game_message) {
+                setText('game-message', data.game_message); toggleDisplay('game-message', true); messagesWereShown = true; setTimeout(() => { toggleDisplay('game-message', false); if(currentPlayerData) currentPlayerData.game_message = null; }, 5000);
+            }
+
             if (data.error_message) { setText('error-message', data.error_message); toggleDisplay('error-message', true); messagesWereShown = true; setTimeout(() => { toggleDisplay('error-message', false); if(currentPlayerData) currentPlayerData.error_message = null; }, 8000); }
             // join_error wird nur angezeigt, wenn keine player_id vorhanden ist oder der Spieler auf Lobby-Bestätigung wartet
             if (data.join_error && (!data.player_id || (data.player_id && data.game_state?.status === GAME_STATE_LOBBY && !data.confirmed_for_lobby) )) { setText('join-error-message', data.join_error); toggleDisplay('join-error-message', true); messagesWereShown = true; }
@@ -525,7 +550,7 @@
                 earlyEndVoteButton.disabled = data.player_has_requested_early_end || !isSocketConnected; // Deaktiviere, wenn bereits abgestimmt oder Socket getrennt
                 earlyEndVoteButton.textContent = data.player_has_requested_early_end ? 'Abstimmung gesendet' : 'Runde vorzeitig beenden';
                 earlyEndVoteInfo.textContent = `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`;
-            } else { toggleDisplay(earlyEndVoteContainer.id, false); }
+            } else { toggleDisplay(early-end-vote-container.id, false); }
 
             // Server Management Container
             const serverMgmtContainer = $('#server-management-container');
@@ -580,6 +605,7 @@
                 else if (data.player_status === 'caught') playerStatusText = 'Gefangen (jetzt Seeker)';
                 else if (data.player_status === 'failed_task') playerStatusText = 'Ausgeschieden (Aufgabe verfehlt)';
                 else if (data.player_status === 'failed_loc_update') playerStatusText = 'Ausgeschieden (Standort nicht aktualisiert)';
+                else if (data.player_status === 'offline') playerStatusText = 'Offline (wird bei Wiederverbindung aktualisiert)'; // NEU
                 setText('player-status-ingame', playerStatusText);
                 setText('game-status-display', serverGameStatusDisplay); // Aktueller Spielstatus vom Server
 
@@ -615,7 +641,27 @@
                     // Hider-Vorbereitungszeit
                     toggleDisplay('hider-wait-countdown-container', true);
                     setText('hider-wait-time-left', data.game_state?.hider_wait_time_left || '0');
-                    if (data.role === 'hider') { show('hider-section'); setText('hider-skips-available-display', data.task_skips_available || 0); }
+                    if (data.role === 'hider') {
+                        show('hider-section');
+                        setText('hider-skips-available-display', data.task_skips_available || 0);
+                        updateHiderTask(data.current_task, data.task_skips_available);
+                        // NEU: Anzeige von Pre-cached Tasks
+                        const precachedTasksContainer = $('#hider-precached-tasks-container');
+                        const precachedTasksList = $('#hider-precached-tasks-list');
+                        if (data.player_status === 'active' && !data.current_task && data.pre_cached_tasks && data.pre_cached_tasks.length > 0) {
+                            toggleDisplay(precachedTasksContainer.id, true);
+                            setHtml(precachedTasksList.id, ''); // Leeren
+                            data.pre_cached_tasks.forEach(ptask => {
+                                const li = document.createElement('li');
+                                li.innerHTML = `<strong>${ptask.description}</strong> (${ptask.points} P.)`;
+                                precachedTasksList.appendChild(li);
+                            });
+                            toggleDisplay('hider-no-task-message', false); // Verstecke "Warte auf Aufgabe"
+                        } else {
+                            toggleDisplay(precachedTasksContainer.id, false);
+                        }
+
+                    }
                     else if (data.role === 'seeker') { show('seeker-section'); }
                     show('all-players-section'); updateAllPlayersList(data.all_players_status, String(data.player_id));
                 } else if (serverGameStatus === GAME_STATE_RUNNING) {
@@ -628,6 +674,22 @@
                         show('hider-section'); setText('hider-skips-available-display', data.task_skips_available || 0);
                         updateHiderTask(data.current_task, data.task_skips_available);
                         updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'hider-leaderboard');
+                        // NEU: Anzeige von Pre-cached Tasks
+                        const precachedTasksContainer = $('#hider-precached-tasks-container');
+                        const precachedTasksList = $('#hider-precached-tasks-list');
+                        if (data.player_status === 'active' && !data.current_task && data.pre_cached_tasks && data.pre_cached_tasks.length > 0) {
+                            toggleDisplay(precachedTasksContainer.id, true);
+                            setHtml(precachedTasksList.id, ''); // Leeren
+                            data.pre_cached_tasks.forEach(ptask => {
+                                const li = document.createElement('li');
+                                li.innerHTML = `<strong>${ptask.description}</strong> (${ptask.points} P.)`;
+                                precachedTasksList.appendChild(li);
+                            });
+                             toggleDisplay('hider-no-task-message', false); // Verstecke "Warte auf Aufgabe"
+                        } else {
+                            toggleDisplay(precachedTasksContainer.id, false);
+                        }
+
                     } else if (data.role === 'seeker') {
                         show('seeker-section'); updateSeekerHiderList(data.hider_locations, isSocketConnected);
                     }
@@ -670,6 +732,7 @@
                     else if (p.status === 'caught') statusDisplay = '<span class="status-caught">Gefangen</span>';
                     else if (p.status === 'failed_task') statusDisplay = '<span class="status-failed">Aufgabe verfehlt</span>';
                     else if (p.status === 'failed_loc_update') statusDisplay = '<span class="status-failed-loc">Kein Standort</span>';
+                    else if (p.status === 'offline') statusDisplay = '<span class="status-offline">Offline</span>'; // NEU
                     else statusDisplay = `<span class="dimmed">${p.status || 'Unbekannt'}</span>`;
                     li.innerHTML = `${p.name} (Rolle: ${p.role || 'N/A'}) - ${statusDisplay}`;
                     if (pid === currentPlayerIdStr) li.classList.add('highlight');
@@ -682,23 +745,39 @@
             const socketConnected = currentPlayerData && currentPlayerData.is_socket_connected_to_server === true;
             const isActiveHider = currentPlayerData && currentPlayerData.role === 'hider' && currentPlayerData.player_status === 'active';
             const skipTaskButton = $('#skip-task-button'); const skipsLeftInButtonSpan = $('#skips-left-in-button');
+            const completeTaskButton = $('#complete-task-form button'); // NEU: Referenz zum Button
 
             if (task && task.description && isActiveHider) {
-                toggleDisplay('hider-task-info', true); toggleDisplay('hider-no-task-message', false);
+                toggleDisplay('hider-task-info', true);
+                toggleDisplay('hider-no-task-message', false); // Verstecke "Warte auf Aufgabe"
+                toggleDisplay('hider-precached-tasks-container', false); // Verstecke Pre-cached Tasks
+
                 setText('task-description', task.description); setText('task-points', task.points);
                 setText('task-time-left', task.time_left_seconds);
-                $('#complete-task-form button').disabled = task.time_left_seconds <= 0 || !socketConnected; // Deaktiviere bei Timeout oder Socket-Verlust
+
+                // NEU: Complete Task Button ist klickbar, wenn der Spieler aktiv ist und eine Aufgabe hat,
+                // auch wenn er offline ist (die Aktion wird gecached)
+                if (completeTaskButton) {
+                    completeTaskButton.disabled = !(isActiveHider && task && task.description);
+                }
+
                 if (skipTaskButton && skipsLeftInButtonSpan) {
                     const numSkips = typeof taskSkipsAvailable === 'number' ? taskSkipsAvailable : 0;
                     toggleDisplay(skipTaskButton.id, true);
-                    skipTaskButton.disabled = !socketConnected || numSkips <= 0 || task.time_left_seconds <= 0;
+                    // Skip Task Button ist nur aktiv, wenn online ODER wenn offline (um caching zu ermöglichen)
+                    // und Skips verfügbar sind und eine Aufgabe da ist.
+                    skipTaskButton.disabled = !(socketConnected || !socketConnected) || numSkips <= 0 || !task.description;
                     setText(skipsLeftInButtonSpan.id, numSkips);
                     skipTaskButton.title = numSkips > 0 ? "Diese Aufgabe überspringen" : "Keine Skips mehr verfügbar";
                 }
             } else {
                 toggleDisplay('hider-task-info', false);
-                // Zeige "Warte auf Aufgabe" nur, wenn Hider und aktiv, aber keine Aufgabe
-                toggleDisplay('hider-no-task-message', isActiveHider);
+                if (completeTaskButton) completeTaskButton.disabled = true; // Button deaktivieren, wenn keine Aufgabe da
+
+                // Zeige "Warte auf Aufgabe" nur, wenn Hider und aktiv, aber keine Aufgabe UND keine Precached Tasks sichtbar
+                const precachedVisible = $('#hider-precached-tasks-container').style.display !== 'none';
+                toggleDisplay('hider-no-task-message', isActiveHider && !precachedVisible);
+
                 if (skipTaskButton) toggleDisplay(skipTaskButton.id, false); // Überspringen-Button verstecken, wenn keine Aufgabe
             }
         }
@@ -727,6 +806,7 @@
                     else if (entry.status === 'caught') statusDisplay = '<span class="status-caught">Gefangen</span>';
                     else if (entry.status === 'failed_task') statusDisplay = '<span class="status-failed">Aufgabe verfehlt</span>';
                     else if (entry.status === 'failed_loc_update') statusDisplay = '<span class="status-failed-loc">Kein Standort</span>';
+                    else if (entry.status === 'offline') statusDisplay = '<span class="status-offline">Offline</span>'; // NEU
                     else statusDisplay = `<span class="dimmed">${entry.status || 'Unbekannt'}</span>`;
                     statusCell.innerHTML = statusDisplay;
                     if (String(entry.id) === currentPlayerIdStr) row.classList.add('highlight');
@@ -778,7 +858,9 @@
                 updateUI(errorData); // UI mit Fehlern anzeigen
 
                 // Wenn der Button vorher deaktiviert wurde, reaktiviere ihn (es sei denn, es ist der Join-Button, der vom Backend verwaltet wird)
-                if (triggeringButton && endpoint !== '/join_game') {
+                // Sonderfall: complete_task_form wird vom client.py selbst behandelt, um Offline-Fähigkeit zu ermöglichen.
+                // Der Button sollte NICHT reaktiviert werden, da der Client ihn eventuell gecached hat.
+                if (triggeringButton && endpoint !== '/join_game' && endpoint !== '/complete_task') {
                     triggeringButton.disabled = false; // Reaktivieren, damit Nutzer erneut versuchen kann
                 }
             }
