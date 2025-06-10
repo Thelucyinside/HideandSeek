@@ -574,7 +574,7 @@ def handle_client_connection(conn, addr):
                                 return # Beendet den Handler-Thread, da Join nicht möglich
 
                             # Generiere eine neue eindeutige Spieler-ID
-                            base_id = str(addr[1]) + "_" + str(random.randint(1000, 9999)) # KORRIGIERT
+                            base_id = str(addr[1]) + "_" + str(random.randint(1000, 9999))
                             id_counter = 0; temp_id_candidate = base_id
                             while temp_id_candidate in game_data.get("players", {}):
                                 id_counter += 1; temp_id_candidate = f"{base_id}_{id_counter}"
@@ -1183,23 +1183,32 @@ def game_logic_thread():
                     if current_time >= game_data["actual_game_over_time"] + POST_GAME_LOBBY_RETURN_DELAY_SECONDS:
                         print("SERVER LOGIC: Game over screen timeout. Transitioning to new lobby.")
 
-                        players_copy_reset = list(game_data.get("players", {}).items()) # Kopie für sichere Iteration
+                        # --- KORRIGIERTE SOFT-RESET LOGIK ---
+                        players_to_keep = {}
+                        players_copy_reset = list(game_data.get("players", {}).items())
+                        
                         for p_id, p_info in players_copy_reset:
-                            if p_id not in game_data.get("players", {}): continue # Spieler könnte zwischendurch gegangen sein
-                            # Setze Spielerdaten für die neue Lobby zurück
-                            original_role = p_info.get("original_role", "hider") # Behalte ursprüngliche Rolle
-                            game_data["players"][p_id].update({
-                                "is_waiting_for_lobby": False,
-                                "confirmed_for_lobby": False,
-                                "is_ready": False,
-                                "current_role": original_role, # Rolle zurücksetzen auf Original
-                                "points": 0, "task": None, "task_deadline": None,
-                                "status_ingame": "active", # Wieder aktiv
-                                "status_before_offline": "active", # NEU: Reset für nächste Runde
-                                "task_skips_available": INITIAL_TASK_SKIPS if original_role == "hider" else 0,
-                                "has_pending_location_warning": False,
-                                "last_location_update_after_warning": 0, "warning_sent_time": 0,
-                            })
+                            # Behalte nur Spieler, die noch eine aktive Verbindung haben.
+                            if p_info.get("client_conn") is not None:
+                                original_role = p_info.get("original_role", "hider")
+                                p_info.update({
+                                    "is_waiting_for_lobby": False,
+                                    "confirmed_for_lobby": True, # Sie sind jetzt bestätigt für die neue Lobby
+                                    "is_ready": False,
+                                    "current_role": original_role,
+                                    "points": 0, "task": None, "task_deadline": None,
+                                    "status_ingame": "active",
+                                    "status_before_offline": "active",
+                                    "task_skips_available": INITIAL_TASK_SKIPS if original_role == "hider" else 0,
+                                    "has_pending_location_warning": False,
+                                    "last_location_update_after_warning": 0, "warning_sent_time": 0,
+                                })
+                                players_to_keep[p_id] = p_info
+                            else:
+                                print(f"SERVER SOFT-RESET: Entferne Spieler {p_info.get('name')} ({p_id}), da keine Verbindung mehr besteht.")
+                        
+                        # Ersetze die alte Spielerliste durch die bereinigte Liste
+                        game_data["players"] = players_to_keep
 
                         # Setze globalen Spielstatus auf Lobby
                         game_data["status"] = GAME_STATE_LOBBY
@@ -1213,9 +1222,10 @@ def game_logic_thread():
                         game_data.get("early_end_requests", set()).clear()
                         game_data["total_active_players_for_early_end"] = 0
                         game_data["actual_game_over_time"] = None
+                        game_data["available_tasks"] = list(TASKS) # Aufgaben neu laden
 
                         broadcast_needed_due_to_time_or_state_change = True
-                        print("SERVER LOGIC: Alle Spieler in den neuen Lobby-Zustand überführt.")
+                        print("SERVER LOGIC: Alle verbliebenen Spieler in den neuen Lobby-Zustand überführt.")
                     else: # Während Game-Over-Screen noch angezeigt wird
                         # Sende weniger häufig Updates, aber genug, damit die UI den Countdown sieht
                         time_since_actual_game_over = current_time - game_data.get("actual_game_over_time", current_time)
