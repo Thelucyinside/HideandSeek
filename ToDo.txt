@@ -7,6 +7,7 @@ Spiel:
 
 Entwicklung:
 - Hider versteckzeit skippen
+- Entwicklermodus (kürzere Zeit zum Testen)
 
 Ui:
 - server verbinden klarer machen (zuerst eigene seite zum verbinden, dann ist man direkt in der Lobby wo man seinen Namen und Rolle angeben kann.)
