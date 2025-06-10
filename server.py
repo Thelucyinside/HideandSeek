@@ -583,7 +583,8 @@ def handle_client_connection(conn, addr):
                             player_entry_data = {
                                 "addr": addr, "name": p_name, "original_role": p_role_pref, "current_role": p_role_pref,
                                 "location": None, "last_seen": time.time(), "client_conn": conn,
-                                "confirmed_for_lobby": False, "is_ready": False, "status_ingame": "active",
+                                "confirmed_for_lobby": True, # NEU: Spieler ist sofort in der Lobby
+                                "is_ready": False, "status_ingame": "active",
                                 "status_before_offline": "active", # NEU: Status vor dem Offline-Gehen
                                 "points": 0, "has_pending_location_warning": False,
                                 "last_location_update_after_warning": 0, "warning_sent_time": 0, "last_location_timestamp": 0,
@@ -710,18 +711,9 @@ def handle_client_connection(conn, addr):
                             current_player_data["client_conn"] = conn
                         player_name_for_log = current_player_data.get("name", "N/A") # Sicherstellen, dass der Name aktuell ist
 
-                        # --- AKTION: CONFIRM_LOBBY_JOIN ---
-                        if action == "CONFIRM_LOBBY_JOIN":
-                            if current_game_status_in_handler == GAME_STATE_LOBBY:
-                                current_player_data["confirmed_for_lobby"] = True
-                                print(f"SERVER ACTION: P:{player_id} ({player_name_for_log}) hat Lobby-Beitritt bestätigt.")
-                                broadcast_full_game_state_to_all()
-                            else:
-                                print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) CONFIRM_LOBBY_JOIN in falschem Status ({current_game_status_in_handler}).")
-                                send_data_to_one_client(conn, player_id) # Nur diesen Spieler updaten
 
                         # --- AKTION: SET_READY ---
-                        elif action == "SET_READY":
+                        if action == "SET_READY":
                             # Nur bestätigte Spieler in der Lobby können sich bereit melden
                             if current_game_status_in_handler == GAME_STATE_LOBBY and current_player_data.get("confirmed_for_lobby"):
                                 current_player_data["is_ready"] = message.get("ready_status") == True
