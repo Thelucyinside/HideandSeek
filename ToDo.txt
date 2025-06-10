@@ -1,6 +1,6 @@
 HIDE AND SEEK TO DO
 Spiel:
-- Nach ende der Runde direkt in Lobby ohne Neuanmeldung
+- Nach ende der Runde direkt in Lobby ohne Neuanmeldung (am besten einfach server reset)
 - auch wärend dem spiel joinen.
 - eingaben auf website in datei cachen für schnellere eingabe (✓)
 - Zone?
@@ -12,6 +12,7 @@ Entwicklung:
 - Hider versteckzeit skippen
 
 Ui:
+- konstante Verbinde mit ip nachricht fixen
 - Leaderboard am ende (Wenn seaker gewinnen, alle seaker auf platz 1 und Hider nach punktzahl, wenn seaker verlieren alle seaker letzter Platz, hider geranked)
 - runterzählen bei spielstart wenn alle bereit sind
 - statistiken zu wo gibt es Internet und wer gewinnt am durchschnitt (name) und wie viele Runden gespielt wie viele aufgaben erledigt usw. Soll in lobby einsehbar sein.
