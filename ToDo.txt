@@ -2,6 +2,7 @@ HIDE AND SEEK TO DO
 Spiel:
 - Nach ende der Runde direkt in Lobby ohne Neuanmeldung
 - auch wärend dem spiel joinen.
+- eingaben auf website in datei cachen für schnellere eingabe
 - Zone?
 - Power Ups des suchers anpassen
 
