@@ -10,3 +10,4 @@ HIDE AND SEEK TO DO
 - Nach ende der Runde direkt in Lobby ohne Neuanmeldung
 - statistiken zu wo gibt es Internet und wer gewinnt am durchschnitt (name) und wie viele Runden gespielt wie viele aufgaben erledigt usw. Soll in lobby einsehbar sein.
 - runterzählen bei spielstart wenn alle bereit sind
+- fixen das man nächste aufgabe sieht.
