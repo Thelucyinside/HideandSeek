@@ -12,7 +12,7 @@ from flask import Flask, jsonify, request, send_from_directory, session
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 65432
 FLASK_PORT = 5000
-STATIC_FOLDER = '.' # Geändert, damit index.html im selben Verzeichnis gefunden wird
+STATIC_FOLDER = 'statics'
 
 # Das globale Dictionary, das die Daten für die UI bereithält
 client_view_data = {
