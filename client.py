@@ -336,7 +336,8 @@ def network_communication_thread():
                         critical_errors = [
                             "Spiel läuft bereits", "Spiel voll", "Nicht authentifiziert",
                             "Bitte neu beitreten", "Du bist nicht mehr Teil des aktuellen Spiels",
-                            "Server wurde von einem Spieler zurückgesetzt", "Rejoin fehlgeschlagen" # Wichtig für Rejoin-Fehler
+                            "Server wurde von einem Spieler zurückgesetzt", "Rejoin fehlgeschlagen",
+                            "Name", "bereits vergeben" # Neuer Fehler vom Server
                         ]
                         if any(crit_err in error_text for crit_err in critical_errors):
                             client_view_data["join_error"] = error_text # Als Join-Fehler markieren
@@ -411,94 +412,89 @@ def get_status():
         data_to_send["session_role_choice"] = session.get("role_choice")
         return jsonify(data_to_send)
 
-@app.route('/join_game', methods=['POST'])
-def join_game_route():
-    """Verarbeitet die Beitrittsanfrage eines Spielers."""
+@app.route('/connect_to_server', methods=['POST'])
+def connect_to_server_route():
+    """Stellt nur die Verbindung zum Server her, ohne einen Spieler zu registrieren."""
     global SERVER_HOST, SERVER_PORT, server_socket_global
-    data = request.get_json();
-    if not data: return jsonify({"success": False, "message": "Keine Daten."}), 400
+    data = request.get_json()
+    if not data or 'server_address' not in data:
+        return jsonify({"success": False, "message": "Server-Adresse fehlt."}), 400
 
-    nickname, role_choice = data.get('nickname'), data.get('role')
-    new_server_host, new_server_port_str = data.get('server_host'), data.get('server_port')
+    server_address = data['server_address'].strip()
+    if not server_address:
+        return jsonify({"success": False, "message": "Server-Adresse darf nicht leer sein."}), 400
 
-    if not nickname or not role_choice: return jsonify({"success": False, "message": "Name/Rolle fehlt."}), 400
-    if not new_server_host or not new_server_port_str: return jsonify({"success": False, "message": "Serveradresse oder Port fehlt."}), 400
-
-    try: new_server_port = int(new_server_port_str)
-    except ValueError: return jsonify({"success": False, "message": "Ungültiger Server-Port."}), 400
-
-    session["nickname"], session["role_choice"] = nickname, role_choice # Speichere in Flask-Session für Prefill
+    try:
+        if ':' in server_address:
+            host, port_str = server_address.rsplit(':', 1)
+            port = int(port_str)
+        else:
+            host = server_address
+            port = 65432 # Standard-Port
+    except ValueError:
+        return jsonify({"success": False, "message": "Ungültiger Port in der Adresse."}), 400
 
     server_details_changed = False
     with client_data_lock:
-        # Prüfe, ob sich Host oder Port geändert haben
-        if SERVER_HOST != new_server_host or SERVER_PORT != new_server_port:
-            SERVER_HOST, SERVER_PORT = new_server_host, new_server_port
-            client_view_data["current_server_host"], client_view_data["current_server_port"] = SERVER_HOST, SERVER_PORT
+        if SERVER_HOST != host or SERVER_PORT != port:
+            SERVER_HOST, SERVER_PORT = host, port
+            client_view_data["current_server_host"] = host
+            client_view_data["current_server_port"] = port
             server_details_changed = True
 
-        # Initialisiere/Setze den Spielerzustand für den Join-Versuch zurück
-        # player_id MUSS None sein, damit der Server es als neuen Join erkennt, nicht als Rejoin.
+        # WICHTIG: Setze den Client-Zustand zurück. Dies signalisiert dem network_thread,
+        # die Verbindung neu aufzubauen und löscht die alte Spieler-ID.
         client_view_data.update({
-            "player_id": None, # Wichtig: Resette die ID für einen neuen Join-Versuch
-            "player_name": nickname, # Wird für JOIN_GAME an Server gesendet
-            "role": role_choice,     # Wird für JOIN_GAME an Server gesendet
-            "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
-            "join_error": None, "error_message": None, "game_message": None,
-            "current_task": None, "hider_leaderboard": [], "hider_locations": {},
-            "hider_location_update_imminent": False,
-            "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0,
-            "offline_action_queue": [], # NEU: Leere die Queue bei einem neuen Join-Versuch
-            "is_processing_offline_queue": False, # NEU: Reset
-            "pre_cached_tasks": [], # NEU: Reset
+            "player_id": None, "player_name": None, "role": None,
+            "confirmed_for_lobby": False, "player_is_ready": False,
+            "join_error": None, "error_message": None, "game_message": "Verbinde mit " + server_address,
         })
-        # game_state sollte mindestens einen Basiswert haben
-        if "game_state" not in client_view_data or client_view_data["game_state"] is None:
-            client_view_data["game_state"] = {"status": "disconnected", "status_display": "Initialisiere..."}
+        client_view_data["is_socket_connected_to_server"] = False # Signal an Netzwerk-Thread: Neu verbinden
 
-        if server_details_changed:
-            client_view_data["game_state"]["status_display"] = f"Serveradresse aktualisiert. Verbinde mit {SERVER_HOST}:{SERVER_PORT}..."
-            client_view_data["is_socket_connected_to_server"] = False # Signal an Netzwerk-Thread: Neu verbinden
-            if server_socket_global: # Schließe alte Verbindung sofort
-                try: server_socket_global.shutdown(socket.SHUT_RDWR); server_socket_global.close()
-                except OSError: pass
-                server_socket_global = None
-        else:
-             client_view_data["game_state"]["status_display"] = f"Sende Beitrittsanfrage als {nickname}..."
-
-
-    response_for_js = {"success": True, "message": "Beitrittsanfrage wird verarbeitet."}
-    if server_details_changed:
-        response_for_js = {"success": True, "message": "Serveradresse geändert. Verbindung wird neu aufgebaut."}
-        # Der Netzwerk-Thread wird die neue Verbindung herstellen. Da player_id None ist, wird kein Rejoin gesendet.
-        # Der User muss dann manuell (oder automatisch, wenn der Netzwerk-Thread JOIN_GAME bei connect senden würde) den JOIN_GAME senden.
-        # Aktuell muss der User nach einem Serverwechsel/Verbindungsabbruch und erfolgreicher Verbindung erneut auf "Spiel suchen & Registrieren" klicken.
-        # Dies ist eine bewusste Entscheidung, um Kontrolle über den Beitrittszeitpunkt zu geben.
-    else:
-        # Nur JOIN_GAME senden, wenn die Socket-Verbindung aktiv ist
-        socket_conn_ok = False
-        with client_data_lock: socket_conn_ok = client_view_data.get("is_socket_connected_to_server", False)
-
-        if socket_conn_ok: # Verbindung besteht zum Server
-            # `send_message_to_server` aktualisiert `is_socket_connected_to_server` bei Misserfolg.
-            if not send_message_to_server({"action": "JOIN_GAME", "name": nickname, "role_preference": role_choice}): # "role" -> "role_preference" (Server-seitig)
-                response_for_js = {"success": False, "message": "Senden der Join-Anfrage fehlgeschlagen."}
-                with client_data_lock: client_view_data["join_error"] = "Senden der Join-Anfrage fehlgeschlagen."
-        else: # Keine Verbindung, der Netzwerk-Thread sollte versuchen, sich zu verbinden
-            with client_data_lock:
-                client_view_data["join_error"] = "Nicht mit Server verbunden. Warte auf Verbindung..."
-                client_view_data["game_state"]["status_display"] = f"Warte auf Verbindung zu {SERVER_HOST}:{SERVER_PORT} für Join als {nickname}..."
-            response_for_js = {"success": True, "message": "Keine Serververbindung. Warte auf automatische Verbindung..."}
-            # Hier wird kein JOIN_GAME gesendet, da keine Verbindung besteht. Der Netzwerk-Thread wird
-            # versuchen, sich zu verbinden, und wenn die Verbindung steht, wird der User die UI aktualisieren.
+    if server_details_changed and server_socket_global:
+        try:
+            server_socket_global.shutdown(socket.SHUT_RDWR)
+            server_socket_global.close()
+        except OSError: pass
+        server_socket_global = None
 
     with client_data_lock:
-        current_status_payload = client_view_data.copy() # Kopie für die Antwort
-        current_status_payload["session_nickname"] = session.get("nickname") # Flask Session Daten mitsenden
-        current_status_payload["session_role_choice"] = session.get("role_choice")
-    current_status_payload["join_attempt_response"] = response_for_js # Füge die spezifische Join-Antwort hinzu
-    return jsonify(current_status_payload)
+        response_data = client_view_data.copy()
+        response_data["session_nickname"] = session.get("nickname")
+        response_data["session_role_choice"] = session.get("role_choice")
+
+    return jsonify(response_data)
+
+
+@app.route('/register_player_details', methods=['POST'])
+def register_player_details_route():
+    """Registriert den Spieler mit Namen und Rolle auf dem verbundenen Server."""
+    data = request.get_json()
+    nickname, role_choice = data.get('nickname'), data.get('role')
+
+    if not nickname or not role_choice:
+        return jsonify({"success": False, "message": "Name oder Rolle fehlt."}), 400
+
+    session["nickname"], session["role_choice"] = nickname, role_choice
+
+    with client_data_lock:
+        client_view_data["player_name"] = nickname # Für JOIN_GAME an Server senden
+
+    socket_conn_ok = False
+    with client_data_lock:
+        socket_conn_ok = client_view_data.get("is_socket_connected_to_server", False)
+
+    if socket_conn_ok:
+        if not send_message_to_server({"action": "JOIN_GAME", "name": nickname, "role_preference": role_choice}):
+            with client_data_lock: client_view_data["join_error"] = "Senden der Join-Anfrage fehlgeschlagen."
+    else:
+        with client_data_lock: client_view_data["join_error"] = "Nicht mit Server verbunden. Bitte zuerst verbinden."
+
+    with client_data_lock:
+        response_data = client_view_data.copy()
+        response_data["session_nickname"] = session.get("nickname")
+        response_data["session_role_choice"] = session.get("role_choice")
+    return jsonify(response_data)
 
 @app.route('/update_location_from_browser', methods=['POST'])
 def update_location_from_browser():
@@ -569,8 +565,6 @@ def handle_generic_action(action_name, payload_key=None, payload_value_from_requ
     return jsonify(response_data)
 
 # --- Flask Routen für Spielaktionen ---
-@app.route('/confirm_lobby_join', methods=['POST'])
-def confirm_lobby_join_route(): return handle_generic_action("CONFIRM_LOBBY_JOIN")
 @app.route('/set_ready', methods=['POST'])
 def set_ready_route(): return handle_generic_action("SET_READY", "ready_status", "ready_status")
 
