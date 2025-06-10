@@ -48,38 +48,46 @@
         .player-list li:last-child { border-bottom: none; }
         .highlight { background-color: #e6f7ff; font-weight: bold; }
 
-        /* Nachrichten-Stile (Fehler, Erfolg) */
-        #messages-section {
-            padding: 0;
-            background: none;
-            box-shadow: none;
-            /* --- FIX FÜR JITTER-PROBLEM --- */
-            /* Wir geben dem Container eine Mindesthöhe, damit er nicht zusammenfällt, wenn er leer ist. */
-            /* Dadurch wird verhindert, dass der Inhalt darunter auf- und abspringt. */
-            min-height: 4em; 
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            /* --- ENDE FIX --- */
+        /* --- NEUES, JITTER-FREIES BENACHRICHTIGUNGSSYSTEM --- */
+        #notification-container {
+            position: fixed; /* Absolut entscheidend: Nimmt das Element aus dem Dokumentenfluss */
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%); /* Zentriert das Element horizontal */
+            width: 90%;
+            max-width: 500px;
+            z-index: 1000; /* Stellt sicher, dass es über allem anderen liegt */
+            pointer-events: none; /* Klicks "fallen durch" den leeren Container */
         }
-        #messages-section p {
-            padding: 10px;
-            border-radius: 4px;
-            margin: 0 0 10px 0;
-            visibility: hidden; /* Standardmäßig unsichtbar */
-            height: 0;
+
+        .notification {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            text-align: center;
             opacity: 0;
-            transition: visibility 0s 0.2s, opacity 0.2s linear, height 0.2s ease-in-out;
+            transform: translateY(-20px);
+            transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+            pointer-events: auto; /* Benachrichtigungen selbst sind wieder klickbar (falls nötig) */
+            color: #fff;
+            font-weight: 500;
         }
-        #messages-section p:last-child { margin-bottom: 0; }
-        #messages-section p.visible {
-            visibility: visible;
-            height: auto;
+
+        .notification.visible {
             opacity: 1;
-            transition: opacity 0.2s linear, height 0.2s ease-in-out;
+            transform: translateY(0);
         }
-        .error { color: #d9534f; background-color: #f2dede; border: 1px solid #ebccd1; }
-        .success { color: #5cb85c; background-color: #dff0d8; border: 1px solid #d6e9c6; }
+
+        .notification.error {
+            background-color: #dc3545; /* Roter Hintergrund */
+        }
+
+        .notification.success {
+            background-color: #28a745; /* Grüner Hintergrund */
+        }
+        /* --- ENDE DES NEUEN SYSTEMS --- */
+
 
         /* Button- und Input-Stile */
         button, input[type="submit"] {
@@ -104,7 +112,6 @@
             border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em;
         }
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
-        #mapLink a { color: #007bff; text-decoration: none; font-weight: normal; }
 
         /* Countdown und Statusanzeigen */
         .countdown {
@@ -113,7 +120,7 @@
         }
         .status-active { color: green; font-weight: bold; }
         .status-caught { color: orange; font-weight: bold; }
-        .status-failed, .status-failed-loc { color: red; font-weight: bold; }
+        .status-failed, .status-failed-loc, .status-failed_task, .status-failed_loc_update { color: red; font-weight: bold; }
         .status-offline { color: #888; font-style: italic; }
         .status-connected { color: green; font-weight: bold; }
         .status-disconnected { color: red; font-weight: bold; }
@@ -125,9 +132,9 @@
         .leaderboard th { background-color: #f8f9fa; color: #333; }
 
         /* Haupt-Sichtbarkeitssteuerung */
-        .section { display: none; } 
+        .section { display: none; }
         .section.visible { display: block; }
-        
+
         .visibility-container { visibility: hidden; opacity: 0; height: 0; transition: visibility 0s 0.2s, opacity 0.2s, height 0.2s; }
         .visibility-container.visible { visibility: visible; opacity: 1; height: auto; transition: opacity 0.2s, height 0.2s; }
 
@@ -149,6 +156,12 @@
     </style>
 </head>
 <body>
+    <div id="notification-container">
+        <div id="game-message" class="notification success"></div>
+        <div id="error-message" class="notification error"></div>
+        <div id="location-error-message" class="notification error"></div>
+    </div>
+
     <div id="app-container">
         <!-- Schritt 1: Server-Verbindung herstellen -->
         <div id="connect-section" class="container section visible">
@@ -159,14 +172,6 @@
                 <input type="text" id="server-address" name="server_address" placeholder="host:port (Standard-Port: 65432)" required>
                 <button id="connect-to-server-button">Mit Server verbinden</button>
             </div>
-            <p id="connect-error-message" class="error" style="display:none;"></p>
-        </div>
-
-        <!-- Abschnitt: Allgemeine Nachrichten (immer vorhanden, um Zucken zu vermeiden) -->
-        <div id="messages-section" class="container section">
-            <p id="game-message" class="success"></p>
-            <p id="error-message" class="error"></p>
-            <p id="location-error-message" class="error"></p>
         </div>
 
         <!-- Schritt 2: Lobby-Registrierung -->
@@ -233,7 +238,7 @@
                     </button>
                 </div>
                 <p id="hider-no-task-message" class="dimmed visibility-container">Warte auf eine neue Aufgabe vom Server...</p>
-                 <p id="hider-warning-text" class="error visibility-container" style="font-weight:bold; text-align:center;">
+                 <p id="hider-warning-text" class="error visibility-container" style="font-weight:bold; text-align:center; background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 5px;">
                     ACHTUNG HIDER! Dein Standort wird bald an die Seeker gesendet.
                 </p>
             </div>
@@ -326,14 +331,10 @@
         const SERVER_ADDRESS_KEY = 'hideAndSeekServerAddress';
         let statusUpdateInterval;
 
-
         // --- DOM Hilfsfunktionen ---
         function $(selector) { return document.querySelector(selector); }
-        function show(id) { const el = $(`#${id}`); if (el) el.classList.add('visible'); }
-        function hide(id) { const el = $(`#${id}`); if (el) el.classList.remove('visible'); }
         function setText(id, textContent) { const el = $(`#${id}`); if (el) el.textContent = textContent || ''; }
         function setHtml(id, htmlContent) { const el = $(`#${id}`); if (el) el.innerHTML = htmlContent || ''; }
-        
         function toggleVisibility(id, showFlag) {
             const el = $(`#${id}`);
             if (el) {
@@ -341,15 +342,15 @@
                 else el.classList.remove('visible');
             }
         }
-        function toggleMessage(id, message) {
+        
+        function toggleNotification(id, message) {
             const el = $(`#${id}`);
-            if(el) {
+            if (el) {
                 if (message) {
                     el.textContent = message;
                     el.classList.add('visible');
                 } else {
                     el.classList.remove('visible');
-                    setTimeout(() => { if(!el.classList.contains('visible')) el.textContent = ''; }, 200);
                 }
             }
         }
@@ -371,7 +372,6 @@
             });
         }
 
-
         function updateUI(data) {
             currentPlayerData = JSON.parse(JSON.stringify(data)); // Deep copy
             resetAllSections();
@@ -384,30 +384,31 @@
             const isGameOver = serverGameStatus === GAME_STATE_HIDER_WINS || serverGameStatus === GAME_STATE_SEEKER_WINS;
 
             // --- Globale Elemente ---
-            show('messages-section');
             if (data.is_processing_offline_queue) {
-                 toggleMessage('game-message', 'Synchronisiere Offline-Aktionen mit dem Server...');
+                 toggleNotification('game-message', 'Synchronisiere Offline-Aktionen mit dem Server...');
             } else if (data.game_message) {
-                toggleMessage('game-message', data.game_message);
-                setTimeout(() => { toggleMessage('game-message', null); if(currentPlayerData) currentPlayerData.game_message = null; }, 5000);
+                toggleNotification('game-message', data.game_message);
+                setTimeout(() => {
+                    if ($('#game-message').textContent === data.game_message) {
+                        toggleNotification('game-message', null);
+                    }
+                }, 5000);
             } else {
-                toggleMessage('game-message', null);
+                toggleNotification('game-message', null);
             }
-            toggleMessage('error-message', data.error_message || data.join_error);
-            // Location-Error wird separat behandelt
+            toggleNotification('error-message', data.error_message || data.join_error);
             
             toggleVisibility('server-management-container', isSocketConnected);
             if($('#force-server-reset-button')) $('#force-server-reset-button').disabled = !isSocketConnected;
 
-
             // --- Haupt-Ansichten-Logik ---
             if (!userHasInitiatedConnection) {
-                show('connect-section');
+                $('.section#connect-section').classList.add('visible');
                 setText('connect-socket-status-display', 'Bereit zum Verbinden');
                 $('#connect-socket-status-display').className = 'dimmed';
             } 
             else if (!isSocketConnected) {
-                show('connect-section');
+                $('.section#connect-section').classList.add('visible');
                 setText('connect-socket-status-display', serverGameStatusDisplay);
                 $('#connect-socket-status-display').className = 'status-connecting';
                 if (data.error_message || data.join_error) {
@@ -415,7 +416,7 @@
                 }
             }
             else if (isSocketConnected && !hasPlayerId && !isGameOver) {
-                show('lobby-registration-section');
+                $('.section#lobby-registration-section').classList.add('visible');
                 $('#register-in-lobby-button').disabled = false;
                 const nicknameInput = $('#lobby-nickname');
                 if (nicknameInput && document.activeElement !== nicknameInput) {
@@ -430,7 +431,7 @@
                 const playerAccuracy = data.location?.length > 2 && data.location[2] !== null ? parseFloat(data.location[2]).toFixed(1) : 'N/A';
                 
                 if (serverGameStatus === GAME_STATE_LOBBY) {
-                    show('lobby-view-section');
+                    $('.section#lobby-view-section').classList.add('visible');
                     const lobbySocketStatusEl = $('#lobby-socket-connection-status');
                     setText(lobbySocketStatusEl.id, isSocketConnected ? 'Verbunden' : 'Getrennt');
                     lobbySocketStatusEl.className = isSocketConnected ? 'status-connected' : 'status-disconnected';
@@ -447,21 +448,23 @@
                     setText('lobby-player-accuracy', playerAccuracy);
 
                 } else { // HIDER_WAIT oder RUNNING
-                    show('ingame-view-section');
+                    $('.section#ingame-view-section').classList.add('visible');
                     const ingameSocketStatusEl = $('#ingame-socket-connection-status');
                     setText(ingameSocketStatusEl.id, isSocketConnected ? 'Verbunden' : 'Getrennt');
                     ingameSocketStatusEl.className = isSocketConnected ? 'status-connected' : 'status-disconnected';
                     
                     setText('ingame-player-name', data.player_name);
                     setText('ingame-player-role', data.role);
-                    setText('ingame-player-status', data.player_status);
+                    const statusClass = `status-${data.player_status || 'unknown'}`;
+                    setHtml('ingame-player-status', `<span class="${statusClass}">${data.player_status}</span>`);
+
                     setText('game-status-display', serverGameStatusDisplay);
                     setText('ingame-player-accuracy', playerAccuracy);
 
                     toggleVisibility('hider-wait-countdown-container', serverGameStatus === GAME_STATE_HIDER_WAIT);
                     setText('hider-wait-time-left', data.game_state?.hider_wait_time_left || '0');
                     
-                    toggleVisibility('game-time-left-container', serverGame-status === GAME_STATE_RUNNING);
+                    toggleVisibility('game-time-left-container', serverGameStatus === GAME_STATE_RUNNING);
                     const timeLeft = data.game_state?.game_time_left || 0;
                     setText('game-time-left', `${Math.floor(timeLeft / 60)} Min ${timeLeft % 60} Sek`);
                     
@@ -491,17 +494,15 @@
                 }
             } 
             else if (isGameOver) {
-                show('game-over-section');
+                $('.section#game-over-section').classList.add('visible');
                 setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
                 updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
                 toggleVisibility('game-over-leaderboard-container', data.hider_leaderboard?.length > 0);
             }
 
-            // Standort-Updates starten/stoppen
             if (hasPlayerId && !isGameOver) startLocationUpdates(); else stopLocationUpdates();
         }
 
-        // --- UI Update Hilfsfunktionen (unverändert) ---
         function updateLobbyPlayerList(lobbyPlayers, currentPlayerIdStr) {
             const ul = $('#lobby-player-list'); setHtml(ul.id, '');
             if (lobbyPlayers && Object.keys(lobbyPlayers).length > 0) {
@@ -515,12 +516,92 @@
                 });
             } else { ul.innerHTML = '<li class="dimmed">Warte auf weitere Spieler...</li>'; }
         }
-        function updateAllPlayersList(allPlayers, currentPlayerIdStr) { /* ... (wie gehabt) ... */ }
-        function updateHiderTask(task, taskSkipsAvailable) { /* ... (wie gehabt) ... */ }
-        function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId) { /* ... (wie gehabt) ... */ }
-        function updateSeekerHiderList(hiderLocations, isSocketConnected) { /* ... (wie gehabt) ... */ }
 
-        // --- Backend-Kommunikation und Logik ---
+        function updateAllPlayersList(allPlayers, currentPlayerIdStr) {
+            const el = $('#all-players-list'); setHtml(el.id, '');
+            if (allPlayers && Object.keys(allPlayers).length > 0) {
+                Object.entries(allPlayers).forEach(([pid, p]) => {
+                    const li = document.createElement('li');
+                    const statusClass = `status-${p.status || 'unknown'}`;
+                    const statusText = p.status || 'Unbekannt';
+                    const statusDisplay = `<span class="${statusClass}">${statusText}</span>`;
+                    li.innerHTML = `${p.name} (Rolle: ${p.role || 'N/A'}) - ${statusDisplay}`;
+                    if (pid === currentPlayerIdStr) li.classList.add('highlight');
+                    el.appendChild(li);
+                });
+            } else { el.innerHTML = '<li class="dimmed">Keine Spielerinformationen.</li>'; }
+        }
+
+        function updateHiderTask(task, taskSkipsAvailable) {
+            const isActiveHider = currentPlayerData?.role === 'hider' && currentPlayerData?.player_status === 'active';
+            const skipTaskButton = $('#skip-task-button');
+            const completeTaskButton = $('#complete-task-form button');
+
+            if (task && isActiveHider) {
+                toggleVisibility('hider-task-info', true);
+                toggleVisibility('hider-no-task-message', false);
+                setText('task-description', task.description);
+                setText('task-points', task.points);
+                setText('task-time-left', task.time_left_seconds);
+                if (completeTaskButton) completeTaskButton.disabled = false;
+                if (skipTaskButton) {
+                    const numSkips = taskSkipsAvailable || 0;
+                    toggleVisibility(skipTaskButton.id, true);
+                    skipTaskButton.disabled = numSkips <= 0;
+                    $('#skips-left-in-button').textContent = numSkips;
+                }
+            } else {
+                toggleVisibility('hider-task-info', false);
+                if (completeTaskButton) completeTaskButton.disabled = true;
+                if (skipTaskButton) toggleVisibility(skipTaskButton.id, false);
+                toggleVisibility('hider-no-task-message', isActiveHider);
+            }
+        }
+
+        function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId) {
+            const containerId = tableId === 'game-over-leaderboard' ? 'game-over-leaderboard-container' : 'hider-leaderboard-container';
+            const tbody = $(`#${tableId} tbody`);
+            if (!tbody) return;
+            tbody.innerHTML = '';
+            const shouldShow = leaderboardData?.length > 0;
+            toggleVisibility(containerId, shouldShow);
+            if (shouldShow) {
+                leaderboardData.forEach(entry => {
+                    const row = tbody.insertRow();
+                    row.insertCell().textContent = entry.name;
+                    row.insertCell().textContent = entry.points;
+                    const statusClass = `status-${entry.status || 'unknown'}`;
+                    const statusText = entry.status || 'Unbekannt';
+                    const statusDisplay = `<span class="${statusClass}">${statusText}</span>`;
+                    row.insertCell().innerHTML = statusDisplay;
+                    if (String(entry.id) === currentPlayerIdStr) row.classList.add('highlight');
+                });
+            }
+        }
+
+        function updateSeekerHiderList(hiderLocations, isSocketConnected) {
+            const ul = $('#seeker-hider-list');
+            ul.innerHTML = '';
+            const isActiveSeeker = currentPlayerData?.role === 'seeker' && currentPlayerData?.player_status === 'active';
+            const hasHiders = isActiveSeeker && hiderLocations && Object.keys(hiderLocations).length > 0;
+            toggleVisibility('seeker-no-hiders-message', !hasHiders && isActiveSeeker);
+            if (hasHiders) {
+                Object.entries(hiderLocations).forEach(([hiderId, hider]) => {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong>${hider.name}</strong> (Gesehen: ${hider.timestamp || 'N/A'})
+                        <a href="https://www.google.com/maps?q=${hider.lat},${hider.lon}" target="_blank" style="margin-left: 5px;">Karte</a>
+                        <button class="catch-hider-btn action-btn" data-hider-id="${hiderId}" ${!isSocketConnected ? 'disabled' : ''}>Fangen!</button>`;
+                    ul.appendChild(li);
+                });
+                document.querySelectorAll('.catch-hider-btn').forEach(button => {
+                    button.onclick = async function() {
+                        this.disabled = true;
+                        await sendClientAction('/catch_hider', { hider_id_to_catch: this.dataset.hiderId }, this);
+                    };
+                });
+            }
+        }
+
         async function sendClientAction(endpoint, bodyPayload = null, triggeringButton = null) {
              if (triggeringButton) triggeringButton.disabled = true;
             try {
@@ -538,60 +619,122 @@
                 errorData.is_socket_connected_to_server = false;
                 updateUI(errorData);
             } finally {
-                // Button wieder aktivieren, außer für Aktionen, die einen Zustandswechsel erzwingen
                 if (triggeringButton && !['/complete_task', '/set_ready', '/return_to_registration'].includes(endpoint)) {
                     triggeringButton.disabled = false;
                 }
             }
         }
-        function handleLocationSuccess(position) { /* ... (wie gehabt) ... */ }
-        function handleLocationError(error) { /* ... (wie gehabt) ... */ }
-        async function sendLocationToClientBackend(lat, lon, accuracy) { /* ... (wie gehabt) ... */ }
-        function startLocationUpdates() { /* ... (wie gehabt) ... */ }
-        function stopLocationUpdates() { /* ... (wie gehabt) ... */ }
 
-        // --- Event Listener ---
-        $('#connect-to-server-button')?.addEventListener('click', (event) => { /* ... */ });
-        $('#register-in-lobby-button')?.addEventListener('click', (event) => { /* ... */ });
-        $('#ready-form')?.addEventListener('submit', (event) => { /* ... */ });
-        $('#change-details-button')?.addEventListener('click', (event) => { /* ... */ });
-        $('#complete-task-form button')?.addEventListener('click', (event) => { /* ... */ });
-        $('#request-early-end-button')?.addEventListener('click', (event) => { /* ... */ });
-        $('#skip-task-button')?.addEventListener('click', (event) => { /* ... */ });
-        $('#force-server-reset-button')?.addEventListener('click', (event) => { /* ... */ });
+        function handleLocationSuccess(position) {
+            const { latitude: lat, longitude: lon, accuracy } = position.coords;
+            setText('lobby-player-accuracy', accuracy.toFixed(1));
+            setText('ingame-player-accuracy', accuracy.toFixed(1));
+            toggleNotification('location-error-message', null);
+            const now = Date.now();
+            if (currentPlayerData?.player_id && (now - lastLocationSentTime > LOCATION_UPDATE_INTERVAL_MS / 2 || lastLocationSentTime === 0)) {
+                sendLocationToClientBackend(lat, lon, accuracy);
+                lastLocationSentTime = now;
+            }
+        }
+
+        function handleLocationError(error) {
+            let message = "Unbekannter Standortfehler";
+            if (error.code === error.PERMISSION_DENIED) message = "Zugriff auf Standort blockiert.";
+            else if (error.code === error.POSITION_UNAVAILABLE) message = "Standort nicht verfügbar.";
+            else if (error.code === error.TIMEOUT) message = "Timeout bei der Standortabfrage.";
+            toggleNotification('location-error-message', message);
+        }
+
+        async function sendLocationToClientBackend(lat, lon, accuracy) {
+            try {
+                const response = await fetch('/update_location_from_browser', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ lat: lat, lon: lon, accuracy: accuracy })
+                });
+                if (!response.ok) console.error("Fehler beim Senden des Standorts an Client-Backend:", response.status);
+            } catch (error) {
+                console.error("Netzwerkfehler beim Senden des Standorts an Client-Backend:", error);
+            }
+        }
+
+        function startLocationUpdates() {
+            if (navigator.geolocation && locationWatchId === null) {
+                locationWatchId = navigator.geolocation.watchPosition(handleLocationSuccess, handleLocationError, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+            }
+        }
+
+        function stopLocationUpdates() {
+            if (navigator.geolocation && locationWatchId !== null) {
+                navigator.geolocation.clearWatch(locationWatchId);
+                locationWatchId = null;
+            }
+        }
         
+        async function fetchStatusAndUpdateUI() {
+            try {
+                const response = await fetch('/status');
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                updateUI(data);
+            } catch (error) {
+                console.error("Netzwerkfehler zum lokalen Client-Backend:", error);
+                const tempErrorData = JSON.parse(JSON.stringify(currentPlayerData || {}));
+                if (!tempErrorData.game_state) tempErrorData.game_state = {};
+                tempErrorData.game_state.status_display = "Client-Server (Python) nicht erreichbar.";
+                tempErrorData.error_message = "Lokaler Client-Server (Python) antwortet nicht.";
+                tempErrorData.is_socket_connected_to_server = false;
+                updateUI(tempErrorData);
+            }
+        }
+
         async function handleLeaveAndGoToJoinScreen() {
             await sendClientAction('/leave_game_and_go_to_join_screen', null, $('#leave-game-now-button'));
         }
 
-        async function fetchStatusAndUpdateUI() { /* ... (wie gehabt) ... */ }
-        
         document.addEventListener('DOMContentLoaded', () => {
             initializeServerInput();
-            fetchStatusAndUpdateUI(); // Initialer Aufruf
-            clearInterval(statusUpdateInterval); // Alten Timer löschen, falls vorhanden
-            statusUpdateInterval = setInterval(fetchStatusAndUpdateUI, 2500); // Neuen Timer starten
+            fetchStatusAndUpdateUI();
+            clearInterval(statusUpdateInterval);
+            statusUpdateInterval = setInterval(fetchStatusAndUpdateUI, 2500);
+
+            $('#connect-to-server-button')?.addEventListener('click', async (event) => {
+                const serverAddress = $('#server-address').value;
+                if (!serverAddress) {
+                    toggleNotification('error-message', 'Bitte eine Server-Adresse eingeben.');
+                    return;
+                }
+                saveServerAddress(serverAddress);
+                await sendClientAction('/connect_to_server', { server_address: serverAddress }, event.target);
+            });
+            $('#register-in-lobby-button')?.addEventListener('click', async (event) => {
+                const nickname = $('#lobby-nickname').value;
+                const role = $('#lobby-role-choice').value;
+                if (!nickname) { alert("Bitte einen Nicknamen eingeben."); return; }
+                await sendClientAction('/register_player_details', { nickname, role }, event.target);
+            });
+            $('#ready-form').addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const newReadyStatus = !(currentPlayerData.player_is_ready || false);
+                await sendClientAction('/set_ready', { ready_status: newReadyStatus }, event.submitter);
+            });
+            $('#change-details-button')?.addEventListener('click', async (event) => {
+                if (confirm("Möchtest du zur Namens- und Rollenauswahl zurückkehren?")) {
+                    await sendClientAction('/return_to_registration', null, event.target);
+                }
+            });
+            $('#complete-task-form button')?.addEventListener('click', async (event) => {
+                event.preventDefault();
+                await sendClientAction('/complete_task', null, event.target);
+            });
+            $('#request-early-end-button')?.addEventListener('click', (event) => sendClientAction('/request_early_round_end_action', null, event.target));
+            $('#skip-task-button')?.addEventListener('click', (event) => sendClientAction('/skip_task', null, event.target));
+            $('#force-server-reset-button')?.addEventListener('click', (event) => {
+                if (confirm("Bist du sicher, dass du den Spielserver für ALLE Spieler zurücksetzen möchtest?")) {
+                    sendClientAction('/force_server_reset_from_ui', null, event.target);
+                }
+            });
         });
-        
-        // --- Vereinfachte, aber identische Hilfsfunktionen, hier weggelassen für Kürze ---
-        updateAllPlayersList = function(allPlayers, currentPlayerIdStr) { const el = $('#all-players-list'); setHtml(el.id, ''); if (allPlayers && Object.keys(allPlayers).length > 0) { for (const pid in allPlayers) { const p = allPlayers[pid]; const li = document.createElement('li'); let statusDisplay; if (p.status === 'active') statusDisplay = '<span class="status-active">Aktiv</span>'; else if (p.status === 'caught') statusDisplay = '<span class="status-caught">Gefangen</span>'; else if (p.status === 'failed_task') statusDisplay = '<span class="status-failed">Aufgabe verfehlt</span>'; else if (p.status === 'failed_loc_update') statusDisplay = '<span class="status-failed-loc">Kein Standort</span>'; else if (p.status === 'offline') statusDisplay = '<span class="status-offline">Offline</span>'; else statusDisplay = `<span class="dimmed">${p.status || 'Unbekannt'}</span>`; li.innerHTML = `${p.name} (Rolle: ${p.role || 'N/A'}) - ${statusDisplay}`; if (pid === currentPlayerIdStr) li.classList.add('highlight'); el.appendChild(li); } } else { el.innerHTML = '<li class="dimmed">Keine Spielerinformationen.</li>'; } };
-        updateHiderTask = function(task, taskSkipsAvailable) { const isActiveHider = currentPlayerData?.role === 'hider' && currentPlayerData?.player_status === 'active'; const skipTaskButton = $('#skip-task-button'); const completeTaskButton = $('#complete-task-form button'); if (task && isActiveHider) { toggleVisibility('hider-task-info', true); toggleVisibility('hider-no-task-message', false); setText('task-description', task.description); setText('task-points', task.points); setText('task-time-left', task.time_left_seconds); if (completeTaskButton) completeTaskButton.disabled = false; if (skipTaskButton) { const numSkips = taskSkipsAvailable || 0; toggleVisibility(skipTaskButton.id, true); skipTaskButton.disabled = numSkips <= 0; $('#skips-left-in-button').textContent = numSkips; } } else { toggleVisibility('hider-task-info', false); if (completeTaskButton) completeTaskButton.disabled = true; if (skipTaskButton) toggleVisibility(skipTaskButton.id, false); toggleVisibility('hider-no-task-message', isActiveHider); } };
-        updateHiderLeaderboard = function(leaderboardData, currentPlayerIdStr, tableId) { const containerId = tableId === 'game-over-leaderboard' ? 'game-over-leaderboard-container' : 'hider-leaderboard-container'; const tbody = $(`#${tableId} tbody`); if (!tbody) return; tbody.innerHTML = ''; const shouldShow = leaderboardData?.length > 0; toggleVisibility(containerId, shouldShow); if (shouldShow) { leaderboardData.forEach(entry => { const row = tbody.insertRow(); row.insertCell().textContent = entry.name; row.insertCell().textContent = entry.points; let statusDisplay; if (entry.status === 'active') statusDisplay = '<span class="status-active">Aktiv</span>'; else if (entry.status === 'caught') statusDisplay = '<span class="status-caught">Gefangen</span>'; else if (entry.status === 'offline') statusDisplay = '<span class="status-offline">Offline</span>'; else statusDisplay = `<span class="dimmed">${entry.status || 'Unbekannt'}</span>`; row.insertCell().innerHTML = statusDisplay; if (String(entry.id) === currentPlayerIdStr) row.classList.add('highlight'); }); } };
-        updateSeekerHiderList = function(hiderLocations, isSocketConnected) { const ul = $('#seeker-hider-list'); ul.innerHTML = ''; const isActiveSeeker = currentPlayerData?.role === 'seeker' && currentPlayerData?.player_status === 'active'; const hasHiders = isActiveSeeker && hiderLocations && Object.keys(hiderLocations).length > 0; toggleVisibility('seeker-no-hiders-message', !hasHiders && isActiveSeeker); if (hasHiders) { for (const hiderId in hiderLocations) { const hider = hiderLocations[hiderId]; const li = document.createElement('li'); li.innerHTML = `<strong>${hider.name}</strong> (Gesehen: ${hider.timestamp || 'N/A'}) <a href="https://www.google.com/maps?q=${hider.lat},${hider.lon}" target="_blank" style="margin-left: 5px;">Karte</a> <button class="catch-hider-btn action-btn" data-hider-id="${hiderId}" ${!isSocketConnected ? 'disabled' : ''}>Fangen!</button>`; ul.appendChild(li); } document.querySelectorAll('.catch-hider-btn').forEach(button => { button.onclick = async function() { this.disabled = true; await sendClientAction('/catch_hider', { hider_id_to_catch: this.dataset.hiderId }, this); }; }); } };
-        handleLocationSuccess = function(position) { const { latitude: lat, longitude: lon, accuracy } = position.coords; setText('lobby-player-accuracy', accuracy.toFixed(1)); setText('ingame-player-accuracy', accuracy.toFixed(1)); toggleMessage('location-error-message', null); const now = Date.now(); if (currentPlayerData?.player_id && (now - lastLocationSentTime > LOCATION_UPDATE_INTERVAL_MS / 2 || lastLocationSentTime === 0)) { sendLocationToClientBackend(lat, lon, accuracy); lastLocationSentTime = now; } };
-        handleLocationError = function(error) { let message = "Unbekannter Standortfehler"; if (error.code === error.PERMISSION_DENIED) message = "Zugriff auf Standort blockiert."; else if (error.code === error.POSITION_UNAVAILABLE) message = "Standort nicht verfügbar."; else if (error.code === error.TIMEOUT) message = "Timeout bei der Standortabfrage."; toggleMessage('location-error-message', message); };
-        sendLocationToClientBackend = async function(lat, lon, accuracy) { try { const response = await fetch('/update_location_from_browser', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ lat: lat, lon: lon, accuracy: accuracy }) }); if (!response.ok) console.error("Fehler beim Senden des Standorts an Client-Backend:", response.status); } catch (error) { console.error("Netzwerkfehler beim Senden des Standorts an Client-Backend:", error); } };
-        startLocationUpdates = function() { if (navigator.geolocation && locationWatchId === null) { locationWatchId = navigator.geolocation.watchPosition(handleLocationSuccess, handleLocationError, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }); } };
-        stopLocationUpdates = function() { if (navigator.geolocation && locationWatchId !== null) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; } };
-        $('#connect-to-server-button')?.addEventListener('click', async (event) => { const serverAddress = $('#server-address').value; if (!serverAddress) { toggleMessage('error-message', 'Bitte eine Server-Adresse eingeben.'); return; } saveServerAddress(serverAddress); await sendClientAction('/connect_to_server', { server_address: serverAddress }, event.target); });
-        $('#register-in-lobby-button')?.addEventListener('click', async (event) => { const nickname = $('#lobby-nickname').value; const role = $('#lobby-role-choice').value; if (!nickname) { alert("Bitte einen Nicknamen eingeben."); return; } await sendClientAction('/register_player_details', { nickname, role }, event.target); });
-        $('#ready-form').addEventListener('submit', async (event) => { event.preventDefault(); const newReadyStatus = !(currentPlayerData.player_is_ready || false); await sendClientAction('/set_ready', { ready_status: newReadyStatus }, event.submitter); });
-        $('#change-details-button')?.addEventListener('click', async (event) => { if (confirm("Möchtest du zur Namens- und Rollenauswahl zurückkehren?")) { await sendClientAction('/return_to_registration', null, event.target); } });
-        $('#complete-task-form button')?.addEventListener('click', async (event) => { event.preventDefault(); await sendClientAction('/complete_task', null, event.target); });
-        $('#request-early-end-button')?.addEventListener('click', (event) => sendClientAction('/request_early_round_end_action', null, event.target));
-        $('#skip-task-button')?.addEventListener('click', (event) => sendClientAction('/skip_task', null, event.target));
-        $('#force-server-reset-button')?.addEventListener('click', (event) => { if (confirm("Bist du sicher, dass du den Spielserver für ALLE Spieler zurücksetzen möchtest?")) { sendClientAction('/force_server_reset_from_ui', null, event.target); } });
-        fetchStatusAndUpdateUI = async function() { try { const response = await fetch('/status'); if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`); const data = await response.json(); updateUI(data); } catch (error) { console.error("Netzwerkfehler zum lokalen Client-Backend:", error); const tempErrorData = JSON.parse(JSON.stringify(currentPlayerData || {})); if (!tempErrorData.game_state) tempErrorData.game_state = {}; tempErrorData.game_state.status_display = "Client-Server (Python) nicht erreichbar."; tempErrorData.error_message = "Lokaler Client-Server (Python) antwortet nicht."; tempErrorData.is_socket_connected_to_server = false; updateUI(tempErrorData); } };
     </script>
 </body>
 </html>
