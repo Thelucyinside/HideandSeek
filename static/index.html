@@ -271,6 +271,7 @@
                  <form id="ready-form">
                      <button type="submit" id="ready-button">Bereit zum Spielstart!</button>
                  </form>
+                 <button id="change-details-button" type="button" class="action-btn warning-btn" style="margin-top: 5px;">Name/Rolle ändern</button>
             </div>
         </div>
 
@@ -866,6 +867,12 @@
             event.preventDefault();
             const newReadyStatus = !(currentPlayerData.player_is_ready || false);
             await sendClientAction('/set_ready', { ready_status: newReadyStatus }, event.submitter);
+        });
+        
+        $('#change-details-button')?.addEventListener('click', async (event) => {
+            if (confirm("Möchtest du zur Namens- und Rollenauswahl zurückkehren?")) {
+                await sendClientAction('/return_to_registration', null, event.target);
+            }
         });
 
         $('#complete-task-form button')?.addEventListener('click', async (event) => {
