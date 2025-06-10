@@ -23,6 +23,7 @@ client_view_data = {
     "confirmed_for_lobby": False,
     "player_is_ready": False,
     "player_status": "active", # active, caught, failed_task, failed_loc_update, offline (NEU)
+    "user_has_initiated_connection": False, # NEU: Flag, der steuert, ob der Client überhaupt eine Verbindung aufbauen soll.
     "is_socket_connected_to_server": False, # Status der direkten Socket-Verbindung zum Spielserver
     "game_state": {
         "status": "disconnected",
@@ -165,6 +166,28 @@ def network_communication_thread():
     buffer = "" # Puffer für unvollständige Nachrichtenpakete
 
     while True:
+        # *** NEUE LOGIK START ***
+        # Prüfe, ob der Benutzer überhaupt eine Verbindung herstellen will.
+        user_wants_to_connect = False
+        with client_data_lock:
+            user_wants_to_connect = client_view_data.get("user_has_initiated_connection", False)
+        
+        if not user_wants_to_connect:
+            # Der Thread ist im "Warte"-Modus.
+            with client_data_lock:
+                if client_view_data["is_socket_connected_to_server"]:
+                    client_view_data["is_socket_connected_to_server"] = False
+                client_view_data["game_state"]["status_display"] = "Bereit zum Verbinden mit einem Server."
+            
+            if server_socket_global:
+                try: server_socket_global.close()
+                except: pass
+                server_socket_global = None
+
+            time.sleep(1) # Kurze Pause, um CPU-Last zu vermeiden
+            continue # Springe zum nächsten Schleifendurchlauf und prüfe erneut
+        # *** NEUE LOGIK ENDE ***
+
         socket_should_be_connected = False
         with client_data_lock:
             socket_should_be_connected = client_view_data["is_socket_connected_to_server"]
@@ -445,6 +468,7 @@ def connect_to_server_route():
         # WICHTIG: Setze den Client-Zustand zurück. Dies signalisiert dem network_thread,
         # die Verbindung neu aufzubauen und löscht die alte Spieler-ID.
         client_view_data.update({
+            "user_has_initiated_connection": True, # NEU: Signal an den Netzwerk-Thread, zu verbinden!
             "player_id": None, "player_name": None, "role": None,
             "confirmed_for_lobby": False, "player_is_ready": False,
             "join_error": None, "error_message": None, "game_message": "Verbinde mit " + server_address,
@@ -653,6 +677,7 @@ def leave_game_and_go_to_join_screen_route():
     # damit die UI ohne Verzögerung zum Join-Screen wechselt.
     with client_data_lock:
         client_view_data.update({
+            "user_has_initiated_connection": False, # NEU: Flag zurücksetzen, um Thread zu stoppen!
             "player_id": None, "player_name": None, "role": None, # IMMEDIATE RESET
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
@@ -669,6 +694,8 @@ def leave_game_and_go_to_join_screen_route():
             client_view_data["game_state"]["status"] = GAME_STATE_LOBBY # Lobby ist ein guter neutraler Startpunkt
             client_view_data["game_state"]["status_display"] = "Zurück zum Beitrittsbildschirm..."
             client_view_data["game_state"]["game_over_message"] = None
+        # Signalisiere dem Netzwerkthread, die Verbindung zu trennen
+        client_view_data["is_socket_connected_to_server"] = False
 
     # Versuche, den Server über das Verlassen zu informieren, aber ignoriere Fehler,
     # da der lokale Reset bereits erfolgt ist.
