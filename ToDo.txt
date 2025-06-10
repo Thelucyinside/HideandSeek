@@ -1,21 +1,19 @@
 HIDE AND SEEK TO DO
 Spiel:
+- Nach ende der Runde direkt in Lobby ohne Neuanmeldung
+- auch wärend dem spiel joinen.
 - Zone?
 - Power Ups des suchers anpassen
-- auch wärend dem spiel joinen.
-- Nach ende der Runde direkt in Lobby ohne Neuanmeldung
 
 Entwicklung:
-- Hider versteckzeit skippen
 - Entwicklermodus (kürzere Zeit zum Testen)
+- Hider versteckzeit skippen
 
 Ui:
--bei disconnect trotzdem zeit runterzählen
 - server verbinden klarer machen (zuerst eigene seite zum verbinden, dann ist man direkt in der Lobby wo man seinen Namen und Rolle angeben kann.)
-- auch wärend dem spiel joinen.
 - Im spiel UI aufräumen
 - Rolle immer vor spiel Wählen können
 - Leaderboard am ende (Wenn seaker gewinnen, alle seaker auf platz 1 und Hider nach punktzahl, wenn seaker verlieren alle seaker letzter Platz, hider geranked)
 - runterzählen bei spielstart wenn alle bereit sind
+- statistiken zu wo gibt es Internet und wer gewinnt am durchschnitt (name) und wie viele Runden gespielt wie viele aufgaben erledigt usw. Soll in lobby einsehbar sein.
 - fixen das man nächste gecachte aufgabe sieht.
--statistiken zu wo gibt es Internet und wer gewinnt am durchschnitt (name) und wie viele Runden gespielt wie viele aufgaben erledigt usw. Soll in lobby einsehbar sein.
