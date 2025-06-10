@@ -574,7 +574,7 @@ def handle_client_connection(conn, addr):
                                 return # Beendet den Handler-Thread, da Join nicht möglich
 
                             # Generiere eine neue eindeutige Spieler-ID
-                            base_id = str(addr[1]) + "_" + str(random.randint(1000,999))
+                            base_id = str(addr[1]) + "_" + str(random.randint(1000, 9999)) # KORRIGIERT
                             id_counter = 0; temp_id_candidate = base_id
                             while temp_id_candidate in game_data.get("players", {}):
                                 id_counter += 1; temp_id_candidate = f"{base_id}_{id_counter}"
