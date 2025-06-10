@@ -866,6 +866,39 @@ def handle_client_connection(conn, addr):
                             else:
                                 send_data_to_one_client(conn, player_id) # Update an Client, falls nichts geändert wurde oder Fehler
 
+                        # --- AKTION: RETURN_TO_REGISTRATION ---
+                        # NEUE AKTION
+                        elif action == "RETURN_TO_REGISTRATION":
+                            # Diese Aktion ist nur in der Lobby sinnvoll
+                            if current_game_status_in_handler == GAME_STATE_LOBBY and player_id in game_data.get("players", {}):
+                                print(f"SERVER ACTION: Spieler {player_name_for_log} ({player_id}) kehrt zur Registrierung zurück.")
+
+                                # 1. Spieler aus der globalen Spielerliste entfernen
+                                del game_data["players"][player_id]
+
+                                # 2. Dem Client eine Update-Nachricht senden, die ihm mitteilt, dass seine player_id ungültig ist.
+                                #    Dies zwingt die UI, das Registrierungsformular anzuzeigen.
+                                reset_payload = {
+                                    "type": "game_update",
+                                    "player_id": None, # Das ist der Schlüssel!
+                                    "join_error": None, # Kein Fehler, nur ein Reset
+                                    "game_message": "Bitte gib deine Details erneut ein.",
+                                    # Der Client soll den zuletzt verwendeten Namen aus seiner Session holen.
+                                    # Wir setzen confirmed_for_lobby nicht, da player_id=None ausreicht.
+                                }
+                                _safe_send_json(conn, reset_payload, player_id, player_name_for_log)
+
+                                # 3. WICHTIG: Die player_id für diesen Handler zurücksetzen.
+                                #    Der Handler ist jetzt wieder "unauthentifiziert" und wartet auf eine neue JOIN_GAME Nachricht.
+                                player_id = None
+                                player_name_for_log = "Unbekannt_Nach_Reset"
+
+                                # 4. Alle anderen Spieler über die Änderung im Lobby-Status informieren
+                                broadcast_full_game_state_to_all()
+                            else:
+                                # Aktion außerhalb der Lobby nicht erlaubt. Sende einfach den aktuellen Zustand.
+                                send_data_to_one_client(conn, player_id)
+
                         # --- AKTION: LEAVE_GAME_AND_GO_TO_JOIN ---
                         elif action == "LEAVE_GAME_AND_GO_TO_JOIN":
                             print(f"SERVER LEAVE: Spieler {player_name_for_log} ({player_id}) verlässt das Spiel.")
