@@ -52,6 +52,22 @@ INITIAL_TASK_SKIPS = 1 # Anzahl der Aufgaben-Skips, die ein Hider pro Spiel erh�
 game_data = {} # Globales Dictionary, das den aktuellen Spielzustand speichert
 data_lock = threading.RLock() # Reentrant Lock für den Zugriff auf game_data
 
+def format_time_ago(seconds_elapsed):
+    """Formatiert eine Anzahl von Sekunden in eine lesbare 'vor X Zeit'-Angabe."""
+    seconds_elapsed = int(seconds_elapsed)
+    if seconds_elapsed < 0: seconds_elapsed = 0
+
+    if seconds_elapsed < 60: return f"{seconds_elapsed} Sek"
+    
+    minutes = seconds_elapsed // 60
+    if minutes < 60: return f"{minutes} Min"
+    
+    hours = minutes // 60
+    if hours < 24: return f"{hours} Std"
+    
+    days = hours // 24
+    return f"{days} Tag(en)"
+
 def _safe_send_json(conn, payload, player_id_for_log="N/A", player_name_for_log="N/A_IN_SAFE_SEND"):
     """Sicherer Versand von JSON-Daten an einen Client. Setzt client_conn auf None bei Fehler."""
     if not conn:
@@ -189,7 +205,7 @@ def assign_task_to_hider(player_id):
                 task = random.choice(possible_tasks)
                 player["task"] = task
                 player["task_deadline"] = time.time() + task.get("time_limit_seconds", 180)
-                print(f"SERVER TASK: Hider {player.get('name','N/A')} ({player_id}) neue Aufgabe: {task.get('description','N/A')}")
+                print(f"SERVER TASK: Hider {player.get('name','N/A')} ({player_id}): Neue Aufgabe: {task.get('description','N/A')}")
             else:
                 print(f"SERVER TASK: Keine unzugewiesenen Aufgaben mehr verfügbar für Hider {player.get('name','N/A')}")
         elif not available_tasks_list:
@@ -348,12 +364,34 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                     }
                 else: # Wenn kein Task vorhanden, aber Hider, dann explizit auf None setzen
                     payload["current_task"] = None
+                
+                # Hinzufügen von pre_cached_tasks für Hider
+                payload["pre_cached_tasks"] = []
+                if player_info.get("status_ingame") == "active": # Nur für aktive Hider Aufgaben vorcachen
+                    available_tasks_list_copy = list(game_data.get("available_tasks", []))
+                    # IDs bereits zugewiesener Aufgaben (aller Spieler)
+                    assigned_task_ids = {p.get("task", {}).get("id") for p in game_data.get("players", {}).values() if p.get("task")}
+                    
+                    unassigned_tasks = [t for t in available_tasks_list_copy if t.get("id") not in assigned_task_ids]
+                    random.shuffle(unassigned_tasks) # Mischen für etwas Varianz
+                    
+                    for i in range(min(2, len(unassigned_tasks))): # Bis zu 2 Aufgaben
+                        task_to_cache = unassigned_tasks[i]
+                        payload["pre_cached_tasks"].append({
+                            "id": task_to_cache.get("id"),
+                            "description": task_to_cache.get("description"),
+                            "points": task_to_cache.get("points")
+                        })
+
 
             if p_role == "seeker" and not is_waiting_for_lobby:
                 visible_hiders = {}
                 current_players_copy = dict(game_data.get("players", {})) # Sicherstellen, dass wir eine Kopie bearbeiten
                 for h_id, h_info in current_players_copy.items():
-                    if h_info.get("current_role") == "hider" and h_info.get("status_ingame") == "active" and h_info.get("location"):
+                    # Nur aktive Hider, die nicht offline sind, und eine Position haben
+                    if h_info.get("current_role") == "hider" and \
+                       h_info.get("status_ingame") == "active" and \
+                       h_info.get("location"):
                         visible_hiders[h_id] = {
                             "name": h_info.get("name", "Unbekannter Hider"),
                             "lat": h_info["location"][0], "lon": h_info["location"][1],
@@ -407,14 +445,14 @@ def check_game_conditions_and_end():
 
         current_time = time.time()
         original_hiders_exist = False
-        active_hiders_in_game = 0 # Nur Hider, die im Spiel gestartet sind und noch aktiv sind
+        active_hiders_in_game = 0 # Nur Hider, die im Spiel gestartet sind und noch aktiv sind (nicht offline)
 
         for p_id, p_info in list(game_data.get("players", {}).items()): # Iteriere über eine Kopie
             if not p_info: continue
 
             if p_info.get("original_role") == "hider":
                 original_hiders_exist = True
-                if p_info.get("status_ingame") == "active":
+                if p_info.get("status_ingame") == "active": # Nur wirklich aktive Hider zählen
                     active_hiders_in_game += 1
 
                 # Überprüfung der Aufgaben-Deadline für aktive Hider
@@ -536,7 +574,7 @@ def handle_client_connection(conn, addr):
                                 return # Beendet den Handler-Thread, da Join nicht möglich
 
                             # Generiere eine neue eindeutige Spieler-ID
-                            base_id = str(addr[1]) + "_" + str(random.randint(100,999))
+                            base_id = str(addr[1]) + "_" + str(random.randint(1000,999))
                             id_counter = 0; temp_id_candidate = base_id
                             while temp_id_candidate in game_data.get("players", {}):
                                 id_counter += 1; temp_id_candidate = f"{base_id}_{id_counter}"
@@ -545,8 +583,9 @@ def handle_client_connection(conn, addr):
                             player_entry_data = {
                                 "addr": addr, "name": p_name, "original_role": p_role_pref, "current_role": p_role_pref,
                                 "location": None, "last_seen": time.time(), "client_conn": conn,
-                                "confirmed_for_lobby": False, "is_ready": False, "status_ingame": "active", "points": 0,
-                                "has_pending_location_warning": False,
+                                "confirmed_for_lobby": False, "is_ready": False, "status_ingame": "active",
+                                "status_before_offline": "active", # NEU: Status vor dem Offline-Gehen
+                                "points": 0, "has_pending_location_warning": False,
                                 "last_location_update_after_warning": 0, "warning_sent_time": 0, "last_location_timestamp": 0,
                                 "task": None, "task_deadline": None,
                                 "task_skips_available": INITIAL_TASK_SKIPS if p_role_pref == "hider" else 0,
@@ -621,6 +660,15 @@ def handle_client_connection(conn, addr):
                                 player_id = rejoin_player_id # Diesem Handler die Spieler-ID zuweisen
                                 player_name_for_log = player_entry.get("name", rejoin_player_name)
                                 found_player_to_rejoin = True
+
+                                # NEU: Spielerstatus auf den vorherigen aktiven Status zurücksetzen
+                                if player_entry.get("status_ingame") == "offline":
+                                    previous_status = player_entry.get("status_before_offline", "active")
+                                    player_entry["status_ingame"] = previous_status
+                                    player_entry.pop("status_before_offline", None) # Temporäres Feld entfernen
+                                    broadcast_server_text_notification(f"Spieler {player_entry.get('name', rejoin_player_name)} ist wieder online (Status: {previous_status}).")
+                                    print(f"SERVER REJOIN: Spieler {player_name_for_log} ({player_id}) Status von 'offline' auf '{previous_status}' gesetzt.")
+
 
                                 print(f"SERVER REJOIN (SUCCESS): Spieler {player_name_for_log} ({player_id}) re-assoziiert mit neuer Verbindung von {addr}")
                                 send_data_to_one_client(conn, player_id) # Wichtig: Zuerst den Rejoiner updaten
@@ -724,6 +772,53 @@ def handle_client_connection(conn, addr):
                                 print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) TASK_COMPLETE nicht möglich (kein Hider, nicht aktiv, keine Aufgabe).")
                                 send_data_to_one_client(conn, player_id)
 
+                        # NEU: AKTION: TASK_COMPLETE_OFFLINE
+                        elif action == "TASK_COMPLETE_OFFLINE":
+                            task_id_offline = message.get("task_id")
+                            completed_at_offline_ts = message.get("completed_at_timestamp_offline")
+                            status_changed_offline, ack_msg_to_client, err_msg_to_client = False, None, None
+
+                            if not task_id_offline or not isinstance(completed_at_offline_ts, (int, float)):
+                                err_msg_to_client = "Ungültige Daten für Offline-Aufgabenerledigung."
+                            elif current_player_data.get("current_role") == "hider" and \
+                                 current_player_data.get("status_ingame") not in ["caught", "failed_task", "failed_loc_update"]: # Darf nicht schon ausgeschieden sein
+                                
+                                server_task_info = current_player_data.get("task")
+                                server_task_deadline = current_player_data.get("task_deadline")
+
+                                if server_task_info and server_task_info.get("id") == task_id_offline:
+                                    if completed_at_offline_ts <= server_task_deadline:
+                                        current_player_data["points"] += server_task_info.get("points", 0)
+                                        task_desc_log = server_task_info.get('description', 'N/A')
+                                        time_diff_str = format_time_ago(time.time() - completed_at_offline_ts)
+
+                                        broadcast_server_text_notification(f"Hider {player_name_for_log} hat Aufgabe '{task_desc_log}' erledigt (offline vor ca. {time_diff_str} nachgereicht).")
+                                        ack_msg_to_client = f"Offline erledigte Aufgabe '{task_desc_log}' erfolgreich angerechnet."
+                                        
+                                        current_player_data["task"], current_player_data["task_deadline"] = None, None
+                                        assign_task_to_hider(player_id)
+                                        status_changed_offline = True
+                                    else:
+                                        err_msg_to_client = f"Offline erledigte Aufgabe (ID: {task_id_offline}) war laut Server-Deadline bereits zum Offline-Zeitpunkt abgelaufen."
+                                        # Aufgabe trotzdem entfernen, neue zuweisen, da Client sie als erledigt sah
+                                        current_player_data["task"], current_player_data["task_deadline"] = None, None
+                                        assign_task_to_hider(player_id) 
+                                        status_changed_offline = True
+                                else: # Task-ID der Offline-Meldung passt nicht zur aktuellen Server-Aufgabe
+                                    err_msg_to_client = f"Gemeldete Offline-Aufgabe (ID: {task_id_offline}) ist nicht (mehr) deine aktuelle Server-Aufgabe. Evtl. zwischenzeitlich geändert/verfallen."
+                                    # Keine Punkte, da die Aufgabe nicht übereinstimmt. Der Spieler erhält durch den Broadcast die korrekte aktuelle Aufgabe.
+                            else:
+                                err_msg_to_client = "Offline-Aufgabe kann nicht angerechnet werden (falsche Rolle oder Spielerstatus)."
+
+                            if err_msg_to_client: _safe_send_json(conn, {"type": "error", "message": err_msg_to_client}, player_id, player_name_for_log)
+                            if ack_msg_to_client: _safe_send_json(conn, {"type": "acknowledgement", "message": ack_msg_to_client}, player_id, player_name_for_log)
+                            
+                            if status_changed_offline:
+                                if check_game_conditions_and_end(): pass
+                                broadcast_full_game_state_to_all()
+                            else: # Auch wenn nichts fundamental geändert wurde, Client-spezifische Nachricht könnte gesendet worden sein
+                                send_data_to_one_client(conn, player_id)
+
                         # --- AKTION: SKIP_TASK ---
                         elif action == "SKIP_TASK":
                             task_skipped_successfully = False; error_message_to_client = None
@@ -760,6 +855,7 @@ def handle_client_connection(conn, addr):
                                current_game_status_in_handler == GAME_STATE_RUNNING and \
                                hider_id_to_catch in game_data.get("players", {}):
                                 hider_player_data = game_data["players"][hider_id_to_catch]
+                                # Hider muss aktiv sein und darf nicht offline sein (da Fangen nur In-Person geht)
                                 if hider_player_data.get("current_role") == "hider" and hider_player_data.get("status_ingame") == "active":
                                     hider_player_data["current_role"] = "seeker"; hider_player_data["status_ingame"] = "caught"
                                     hider_player_data["task"], hider_player_data["task_deadline"] = None, None
@@ -768,7 +864,7 @@ def handle_client_connection(conn, addr):
                                     print(f"SERVER ACTION: Seeker {player_name_for_log} ({player_id}) hat Hider {hider_player_data.get('name','N/A')} ({hider_id_to_catch}) gefangen.")
                                     caught = True
                                 else:
-                                    _safe_send_json(conn, {"type":"error", "message":f"Hider {hider_player_data.get('name','N/A')} kann nicht gefangen werden (falsche Rolle/Status)."}, player_id, player_name_for_log)
+                                    _safe_send_json(conn, {"type":"error", "message":f"Hider {hider_player_data.get('name','N/A')} kann nicht gefangen werden (falsche Rolle/Status oder Offline)."}, player_id, player_name_for_log)
                             else:
                                 _safe_send_json(conn, {"type":"error", "message":f"Aktion 'Fangen' nicht möglich (falsche Rolle/Status oder Hider nicht gefunden)."}, player_id, player_name_for_log)
 
@@ -782,10 +878,23 @@ def handle_client_connection(conn, addr):
                         elif action == "LEAVE_GAME_AND_GO_TO_JOIN":
                             print(f"SERVER LEAVE: Spieler {player_name_for_log} ({player_id}) verlässt das Spiel.")
                             if player_id in game_data.get("players", {}):
-                                del game_data["players"][player_id] # Spielerdaten entfernen
+                                # Setze status_ingame auf "failed_loc_update" (oder einen ähnlichen "ausgeschieden" Status),
+                                # da der Spieler aktiv das Spiel verlässt.
+                                # Dies unterscheidet es vom "offline"-Status.
+                                if game_data["players"][player_id].get("status_ingame") == "active":
+                                     game_data["players"][player_id]["status_ingame"] = "failed_loc_update" # Als "verlassen" markieren
+                                     game_data["players"][player_id]["current_role"] = "seeker" # Ist jetzt auch Seeker
+                                     game_data["players"][player_id]["task"] = None
+                                     game_data["players"][player_id]["task_deadline"] = None
+                                     game_data["players"][player_id]["task_skips_available"] = 0
+                                     game_data["players"][player_id].pop("status_before_offline", None) # Wenn er active war, hat er keinen "before_offline" status mehr
+                                     broadcast_server_text_notification(f"Spieler {player_name_for_log} hat das Spiel vorzeitig verlassen.")
+                                # Da der Client sich selbst auf None setzt, entfernen wir den Spieler aus game_data
+                                # nicht hier, sondern lassen das durch die Lobby-Rückkehr passieren.
+                                # Wichtig ist nur, dass der Status des verlassenden Spielers für andere sichtbar ist.
 
                             _safe_send_json(conn, {"type": "acknowledgement", "message": "Du hast das Spiel verlassen."}, player_id, player_name_for_log)
-                            player_id = None # Wichtig: Spieler-ID von DIESEM Handler entfernen
+                            player_id = None # Wichtig: Spieler-ID von DIESEM Handler entfernen, damit der finally Block ihn nicht als "offline" markiert
                             broadcast_full_game_state_to_all() # Andere Spieler informieren über den Abgang
                             return # Beendet den Handler-Thread für diesen Spieler
 
@@ -835,24 +944,36 @@ def handle_client_connection(conn, addr):
         # Hier muss der Server-Zustand für den Spieler, der diese Verbindung hatte, aktualisiert werden.
         print(f"SERVER CLEANUP ({addr}, P:{player_id}, Name: {player_name_for_log}). Verbindung wird clientseitig geschlossen oder ist bereits verloren.")
         player_affected_by_disconnect = False
+        player_rejoined_meanwhile = False # NEU: Flag, um zu erkennen, ob Spieler bereits rejoined ist
         with data_lock:
             if player_id and player_id in game_data.get("players", {}):
+                player_entry = game_data["players"][player_id]
                 # Wichtig: Nur client_conn auf None setzen, wenn die Verbindung DIESES Handlers
                 # noch die des Spielers ist. Dies ist entscheidend für Reconnects/Rejoins.
                 # Wenn der Spieler bereits erfolgreich rejoined ist, dann zeigt client_conn auf die neue Verbindung.
-                if game_data["players"][player_id].get("client_conn") == conn:
-                    game_data["players"][player_id]["client_conn"] = None
-                    player_affected_by_disconnect = True # Ein bekannter Spieler hat die Verbindung verloren
-                    print(f"SERVER DISCONNECT: Spieler {player_name_for_log} ({player_id}) client_conn auf None gesetzt.")
+                if player_entry.get("client_conn") == conn: # Wenn der alte Handler noch die Verbindung hält
+                    player_entry["client_conn"] = None
+                    # Markiere Spieler als "offline", wenn er nicht schon in einem finalen Zustand ist
+                    if player_entry.get("status_ingame") not in ["offline", "caught", "failed_task", "failed_loc_update"]:
+                        player_entry["status_before_offline"] = player_entry.get("status_ingame", "active")
+                        player_entry["status_ingame"] = "offline"
+                        player_affected_by_disconnect = True
+                        print(f"SERVER DISCONNECT: Spieler {player_name_for_log} ({player_id}) Status auf 'offline' gesetzt.")
+                    else: # Spieler war bereits offline oder im Endstatus, kein Broadcast nötig
+                        print(f"SERVER DISCONNECT: P:{player_id} ({player_name_for_log}) war bereits in End-Status oder offline. Keine Statusänderung.")
                 else:
+                    # Die client_conn des Spielers zeigt auf eine andere Verbindung, d.h. der Spieler hat erfolgreich rejoined.
+                    player_rejoined_meanwhile = True
                     print(f"SERVER DISCONNECT: P:{player_id} ({player_name_for_log}) hat sich bereits mit neuer Verbindung verbunden. Alte Handler-Verbindung wird geschlossen.")
-                    # In diesem Fall war es ein alter Handler, der nach einem Rejoin des Spielers endet.
-                    # Wir brauchen nicht zu broadcasten, da der Rejoin bereits den Status aktualisiert hat.
 
         if player_affected_by_disconnect: # Nur broadcasten, wenn ein aktiver Spieler die Verbindung verloren hat
             if game_data.get("status") == GAME_STATE_RUNNING:
                 if check_game_conditions_and_end(): pass # Prüfen, ob das Spiel durch den Disconnect endet
             broadcast_full_game_state_to_all() # Informiere andere über den (impliziten) Disconnect
+            broadcast_server_text_notification(f"Spieler {player_name_for_log} ist offline gegangen.")
+        elif player_rejoined_meanwhile:
+            # Hier ist kein Broadcast nötig, da der Rejoin-Prozess bereits einen ausgelöst hat.
+            pass
 
         if conn: # Schließe die Socket-Verbindung dieses Handlers, falls noch offen.
             try: conn.close()
@@ -889,8 +1010,9 @@ def game_logic_thread():
                     current_players_in_lobby = game_data.get("players", {})
                     if not current_players_in_lobby: all_in_active_lobby_ready = False
                     else:
+                        # Nur verbundene und bestätigte Spieler zählen als "bereit" für den Start
                         confirmed_players_for_lobby = [p for p in current_players_in_lobby.values()
-                                                       if p.get("confirmed_for_lobby") and p.get("client_conn") is not None] # Nur verbundene Spieler zählen
+                                                       if p.get("confirmed_for_lobby") and p.get("client_conn") is not None]
                         if not confirmed_players_for_lobby:
                             all_in_active_lobby_ready = False
                         else:
@@ -968,7 +1090,8 @@ def game_logic_thread():
                             player_list_copy_warn = list(game_data.get("players", {}).items())
                             for p_id, p_info in player_list_copy_warn:
                                 if p_id not in game_data.get("players",{}): continue
-                                if p_info.get("current_role") == "hider" and p_info.get("status_ingame") == "active":
+                                # Warnung nur für aktive Hider, die auch online sind
+                                if p_info.get("current_role") == "hider" and p_info.get("status_ingame") == "active" and p_info.get("client_conn"):
                                     if not p_info.get("has_pending_location_warning"):
                                         game_data["players"][p_id]["has_pending_location_warning"] = True
                                         game_data["players"][p_id]["warning_sent_time"] = current_time
@@ -988,10 +1111,14 @@ def game_logic_thread():
                             for p_id_h, p_info_h in player_list_copy_bc:
                                 if p_id_h not in game_data.get("players", {}): continue # Spieler könnte inzwischen entfernt worden sein
                                 if p_info_h.get("current_role") == "hider" and p_info_h.get("status_ingame") == "active":
-                                    if p_info_h.get("has_pending_location_warning"):
+                                    # Wenn Hider offline ist, können wir nicht prüfen, ob er aktualisiert hat.
+                                    # Aber wenn er die Warnung erhalten hat und online war, prüfen wir.
+                                    if p_info_h.get("has_pending_location_warning") and p_info_h.get("client_conn"):
                                         # Wenn keine Standortaktualisierung nach der Warnung erfolgte oder vor der Warnung war
                                         if p_info_h.get("last_location_update_after_warning", 0) <= p_info_h.get("warning_sent_time", 0):
                                             active_hiders_who_failed_update_names.append(p_info_h.get('name', 'Unbekannt'))
+                                            # TODO: Bestrafung für nicht aktualisierte Standortdaten hier hinzufügen, falls gewünscht
+                                            # z.B. p_info_h["status_ingame"] = "failed_loc_update"
                                     game_data["players"][p_id_h]["has_pending_location_warning"] = False # Warnung zurücksetzen
 
                             if active_hiders_who_failed_update_names:
@@ -1043,6 +1170,7 @@ def game_logic_thread():
                                 "current_role": original_role, # Rolle zurücksetzen auf Original
                                 "points": 0, "task": None, "task_deadline": None,
                                 "status_ingame": "active", # Wieder aktiv
+                                "status_before_offline": "active", # NEU: Reset für nächste Runde
                                 "task_skips_available": INITIAL_TASK_SKIPS if original_role == "hider" else 0,
                                 "has_pending_location_warning": False,
                                 "last_location_update_after_warning": 0, "warning_sent_time": 0,
