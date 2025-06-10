@@ -3,15 +3,16 @@ import socket
 import json
 import time
 import threading
-import subprocess 
+import subprocess
 import random
+import traceback # Importiert für detailliertere Fehlermeldungen in Threads
 from flask import Flask, jsonify, request, send_from_directory, session
 
 # Standardwerte, können zur Laufzeit geändert werden
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 65432
 FLASK_PORT = 5000
-STATIC_FOLDER = 'static' 
+STATIC_FOLDER = 'static'
 
 # Das globale Dictionary, das die Daten für die UI bereithält
 client_view_data = {
@@ -21,37 +22,36 @@ client_view_data = {
     "location": None,
     "confirmed_for_lobby": False,
     "player_is_ready": False,
-    "player_status": "active",
-    "is_socket_connected_to_server": False,
+    "player_status": "active", # active, caught, failed_task, failed_loc_update
+    "is_socket_connected_to_server": False, # Status der direkten Socket-Verbindung zum Spielserver
     "game_state": {
-        "status": "disconnected", 
+        "status": "disconnected",
         "status_display": "Initialisiere Client...",
-        "game_time_left": 0, 
-        "hider_wait_time_left": 0, 
+        "game_time_left": 0,
+        "hider_wait_time_left": 0,
         "game_over_message": None
     },
-    "lobby_players": {},
-    "all_players_status": {},
-    "current_task": None,
-    "hider_leaderboard": [],
-    "hider_locations": {},
-    # "power_ups_available" wurde entfernt
-    "game_message": None,
-    "error_message": None,
-    "join_error": None,
-    "prefill_nickname": f"Spieler{random.randint(100,999)}",
-    "hider_location_update_imminent": False,
+    "lobby_players": {}, # Nur im Lobby-Status relevant
+    "all_players_status": {}, # Immer relevant für Gesamtübersicht
+    "current_task": None, # Für Hider
+    "hider_leaderboard": [], # Für Hider und am Spielende
+    "hider_locations": {}, # Für Seeker
+    "game_message": None, # Allgemeine Nachrichten vom Server
+    "error_message": None, # Allgemeine Fehlermeldungen vom Server
+    "join_error": None, # Spezifische Fehlermeldung für den Join-Prozess, die zum Join-Screen zurückführt
+    "prefill_nickname": f"Spieler{random.randint(100,999)}", # Vorschlag für Nickname
+    "hider_location_update_imminent": False, # Für Hider-Warnung
     "early_end_requests_count": 0,
     "total_active_players_for_early_end": 0,
     "player_has_requested_early_end": False,
-    "current_server_host": SERVER_HOST,
-    "current_server_port": SERVER_PORT,
-    "task_skips_available": 0
+    "current_server_host": SERVER_HOST, # Aktuell konfigurierter Server-Host
+    "current_server_port": SERVER_PORT, # Aktuell konfigurierter Server-Port
+    "task_skips_available": 0 # Für Hider
 }
-client_data_lock = threading.Lock()
-server_socket_global = None
-is_connected_to_server = False
+client_data_lock = threading.Lock() # Lock für den sicheren Zugriff auf client_view_data
+server_socket_global = None # Der globale Socket zum Spielserver
 
+# Spielzustände (Konstanten zur besseren Lesbarkeit)
 GAME_STATE_LOBBY = "lobby"
 GAME_STATE_HIDER_WAIT = "hider_wait"
 GAME_STATE_RUNNING = "running"
@@ -59,114 +59,197 @@ GAME_STATE_HIDER_WINS = "hider_wins"
 GAME_STATE_SEEKER_WINS = "seeker_wins"
 
 
-app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='') 
+app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='')
+# ACHTUNG: Diesen Secret Key unbedingt ändern, wenn die App produktiv genutzt wird!
 app.secret_key = "dein_super_geheimer_und_einzigartiger_schluessel_hier_aendern_DRINGEND"
 
 def show_termux_notification(title, content, notification_id=None):
+    """Zeigt eine Termux-Benachrichtigung an, falls Termux installiert ist."""
     try:
         command = ['termux-notification', '--title', title, '--content', content]
         if notification_id: command.extend(['--id', str(notification_id)])
-        command.extend(['--vibrate', '500'])
-        subprocess.run(command, check=False)
-    except FileNotFoundError: pass # Ignoriere, wenn termux-notification nicht da ist
-    except Exception: pass # Ignoriere andere Fehler
+        command.extend(['--vibrate', '500']) # Vibrieren für 0.5 Sekunden
+        subprocess.run(command, check=False) # check=False, um Fehler zu ignorieren, wenn Befehl nicht gefunden
+    except FileNotFoundError:
+        pass # Ignoriere, wenn termux-notification nicht gefunden wird
+    except Exception as e:
+        print(f"CLIENT NOTIFICATION ERROR: {e}") # Logge andere unerwartete Fehler
 
 def send_message_to_server(data):
-    global server_socket_global, is_connected_to_server
+    """Sendet eine JSON-Nachricht an den globalen Spielserver-Socket."""
+    global server_socket_global
     action_sent = data.get('action', 'NO_ACTION_SPECIFIED')
-    if server_socket_global and is_connected_to_server:
+    socket_is_currently_connected = False
+    with client_data_lock: # Prüfe den aktuellen Verbindungsstatus unter Lock
+        socket_is_currently_connected = client_view_data["is_socket_connected_to_server"]
+
+    if server_socket_global and socket_is_currently_connected:
         try:
             server_socket_global.sendall(json.dumps(data).encode('utf-8') + b'\n')
             return True
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             print(f"CLIENT SEND (ERROR): Senden von '{action_sent}' fehlgeschlagen, Verbindung verloren: {e}.")
-            is_connected_to_server = False
-            with client_data_lock:
+            with client_data_lock: # Aktualisiere den Verbindungsstatus bei Sendefehler
                 client_view_data["is_socket_connected_to_server"] = False
                 client_view_data["game_state"]["status_display"] = "Verbindung zum Server verloren (Senden)."
                 client_view_data["error_message"] = "Verbindung zum Server verloren."
+        except Exception as e:
+            print(f"CLIENT SEND (UNEXPECTED ERROR): Senden von '{action_sent}' fehlgeschlagen: {e}.")
+            traceback.print_exc()
+            with client_data_lock:
+                client_view_data["is_socket_connected_to_server"] = False
+                client_view_data["error_message"] = "Unerwarteter Fehler beim Senden an Server."
     else:
         with client_data_lock:
+            # Falls kein Socket oder der Status schon als getrennt markiert ist
             client_view_data["is_socket_connected_to_server"] = False
-            if not client_view_data.get("error_message"):
+            if not client_view_data.get("error_message"): # Nur setzen, wenn nicht schon ein anderer Fehler da ist
                  client_view_data["error_message"] = f"Nicht mit Server verbunden. Aktion '{action_sent}' nicht gesendet."
     return False
 
 def network_communication_thread():
-    global server_socket_global, is_connected_to_server, client_view_data, SERVER_HOST, SERVER_PORT
-    buffer = ""
+    """
+    Dieser Thread verwaltet die persistente Socket-Verbindung zum Spielserver.
+    Er versucht, die Verbindung bei Verlust wiederherzustellen und sendet ggf. eine Rejoin-Anfrage.
+    Alle eingehenden Nachrichten vom Server werden hier verarbeitet und in `client_view_data` aktualisiert.
+    """
+    global server_socket_global, client_view_data, SERVER_HOST, SERVER_PORT
+    buffer = "" # Puffer für unvollständige Nachrichtenpakete
+
     while True:
-        if not is_connected_to_server:
+        socket_should_be_connected = False
+        with client_data_lock:
+            socket_should_be_connected = client_view_data["is_socket_connected_to_server"]
+
+        # --- Verbindungsaufbau-Logik ---
+        if not socket_should_be_connected:
             try:
-                current_host_to_connect, current_port_to_connect = "", 0
-                with client_data_lock:
-                    client_view_data["is_socket_connected_to_server"] = False
-                    if not client_view_data.get("error_message") and not client_view_data.get("join_error"): 
+                current_host_to_connect, current_port_to_connect = SERVER_HOST, SERVER_PORT
+                with client_data_lock: # UI-Status aktualisieren
+                    client_view_data["is_socket_connected_to_server"] = False # Stellen sicher, dass er auf False steht
+                    if not client_view_data.get("error_message") and not client_view_data.get("join_error"):
                          client_view_data["game_state"]["status_display"] = f"Verbinde mit Spielserver {SERVER_HOST}:{SERVER_PORT}..."
-                    current_host_to_connect, current_port_to_connect = SERVER_HOST, SERVER_PORT
-                
+
                 temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                temp_sock.settimeout(5)
+                temp_sock.settimeout(5) # Kurzer Timeout für den Verbindungsversuch
                 temp_sock.connect((current_host_to_connect, current_port_to_connect))
-                temp_sock.settimeout(None)
+                temp_sock.settimeout(None) # Nach erfolgreichem Connect: Blockierend machen
                 server_socket_global = temp_sock
-                is_connected_to_server = True
-                buffer = ""
+                buffer = "" # Puffer leeren bei neuer Verbindung
+
                 with client_data_lock:
                     client_view_data["is_socket_connected_to_server"] = True
-                    client_view_data["error_message"] = None; client_view_data["join_error"] = None 
-                    if client_view_data["game_state"].get("status") == "disconnected": 
-                         client_view_data["game_state"]["status_display"] = "Verbunden. Warte auf Spielbeitritt..."
+                    client_view_data["error_message"] = None # Erfolgreiche Verbindung löscht allgemeine Fehler
+
+                    # --- REJOIN LOGIC (Versuch, eine bestehende Sitzung wiederherzustellen) ---
+                    # Wenn wir eine player_id und einen Namen haben, versuchen wir zu rejoind.
+                    if client_view_data.get("player_id") and client_view_data.get("player_name"):
+                        rejoin_payload = {
+                            "action": "REJOIN_GAME",
+                            "player_id": client_view_data["player_id"],
+                            "name": client_view_data["player_name"]
+                        }
+                        try:
+                            # Direkt senden, da send_message_to_server sich selbst auf `client_view_data` basiert.
+                            server_socket_global.sendall(json.dumps(rejoin_payload).encode('utf-8') + b'\n')
+                            client_view_data["game_state"]["status_display"] = f"Sende Rejoin-Anfrage als {client_view_data['player_name']}..."
+                            print(f"CLIENT: REJOIN_GAME für {client_view_data['player_name']} ({client_view_data['player_id']}) gesendet.")
+                        except Exception as e_rejoin:
+                            print(f"CLIENT: Senden von REJOIN_GAME fehlgeschlagen: {e_rejoin}. Versuche Neuverbindung.")
+                            traceback.print_exc()
+                            client_view_data["is_socket_connected_to_server"] = False # Wenn Rejoin nicht gesendet werden konnte, Verbindung wohl nicht stabil
+                            client_view_data["error_message"] = "Senden der Rejoin-Anfrage fehlgeschlagen."
+                            # Der finally-Block wird den Socket schließen, wenn is_socket_connected_to_server False ist.
+                    else: # Keine Player-ID vorhanden, also kein Rejoin-Versuch
+                        if client_view_data["game_state"].get("status") == "disconnected":
+                             client_view_data["game_state"]["status_display"] = "Verbunden. Warte auf Spielbeitritt..."
+
             except socket.timeout:
                 with client_data_lock: client_view_data["game_state"]["status_display"] = f"Verbindung zu {current_host_to_connect}:{current_port_to_connect} Zeitüberschreitung."
+                time.sleep(3); continue # Kurze Pause vor erneutem Versuch
+            except (ConnectionRefusedError, OSError) as e:
+                with client_data_lock: client_view_data["game_state"]["status_display"] = f"Verbindung zu {current_host_to_connect}:{current_port_to_connect} fehlgeschlagen: {type(e).__name__}"
                 time.sleep(3); continue
-            except (ConnectionRefusedError, OSError):
-                with client_data_lock: client_view_data["game_state"]["status_display"] = f"Verbindung zu {current_host_to_connect}:{current_port_to_connect} fehlgeschlagen."
+            except Exception as e_conn:
+                print(f"CLIENT NET (CONNECT ERROR - UNEXPECTED): {e_conn}")
+                traceback.print_exc()
+                with client_data_lock: client_view_data["game_state"]["status_display"] = f"Unbekannter Verbindungsfehler: {type(e_conn).__name__}"
                 time.sleep(3); continue
-            except Exception: 
-                time.sleep(3); continue
-        
-        try:
-            if not server_socket_global: is_connected_to_server = False; time.sleep(0.1); continue
-            data_chunk = server_socket_global.recv(8192)
-            if not data_chunk:
-                is_connected_to_server = False
-                with client_data_lock: client_view_data["game_state"]["status_display"] = "Server hat Verbindung getrennt."
+
+        # Erneute Prüfung, ob die Verbindung im Rejoin-Block fehlgeschlagen ist
+        with client_data_lock:
+            if not client_view_data["is_socket_connected_to_server"]:
+                # Wenn im vorherigen Block die Verbindung als instabil markiert wurde,
+                # schließen wir hier den Socket und gehen zum nächsten Verbindungsversuch
+                if server_socket_global:
+                    try: server_socket_global.close()
+                    except: pass
+                    server_socket_global = None
+                time.sleep(0.1)
                 continue
-            buffer += data_chunk.decode('utf-8')
 
-            while '\n' in buffer:
-                message_str, buffer = buffer.split('\n', 1)
-                if not message_str.strip(): continue
-                message = json.loads(message_str)
+        # --- Nachrichten-Empfangs-Logik ---
+        try:
+            if not server_socket_global: # Sollte nicht passieren, wenn is_socket_connected_to_server True ist, aber zur Sicherheit
+                with client_data_lock: client_view_data["is_socket_connected_to_server"] = False
+                time.sleep(0.1); continue
 
+            data_chunk = server_socket_global.recv(8192) # Daten empfangen
+            if not data_chunk: # Server hat Verbindung geschlossen (recv gibt leeren Byte-String zurück)
+                print("CLIENT NET: Server hat Verbindung getrennt (leere Daten erhalten).")
                 with client_data_lock:
-                    client_view_data["is_socket_connected_to_server"] = True 
+                    client_view_data["is_socket_connected_to_server"] = False
+                    client_view_data["game_state"]["status_display"] = "Server hat Verbindung getrennt."
+                    client_view_data["error_message"] = "Server hat die Verbindung beendet."
+                continue # Geht zum nächsten Schleifendurchlauf (Verbindungsversuch)
+            buffer += data_chunk.decode('utf-8') # Daten zum Puffer hinzufügen
+
+            while '\n' in buffer: # Verarbeite alle vollständigen Nachrichten im Puffer
+                message_str, buffer = buffer.split('\n', 1)
+                if not message_str.strip(): continue # Leere Nachrichten ignorieren
+                message = json.loads(message_str) # JSON-Nachricht parsen
+
+                with client_data_lock: # Sperre für Änderungen an client_view_data
+                    client_view_data["is_socket_connected_to_server"] = True # Nachricht erhalten -> Verbindung ist aktiv
                     msg_type = message.get("type")
 
                     if msg_type == "game_update":
-                        if "player_id" in message and message["player_id"] is None and client_view_data["player_id"] is not None:
-                            client_view_data["player_id"] = None; client_view_data["player_name"] = None 
-                            client_view_data["role"] = None; client_view_data["confirmed_for_lobby"] = False
+                        # Wichtig: Wenn der Server 'player_id: null' sendet, bedeutet das, dass
+                        # unsere aktuelle player_id (falls vorhanden) nicht mehr gültig ist.
+                        # Dies passiert bei fehlgeschlagenem Rejoin, Server-Reset oder Rauswurf.
+                        if "player_id" in message and message["player_id"] is None:
+                            if client_view_data["player_id"] is not None:
+                                print(f"CLIENT: Server hat player_id=None gesendet. Resette Client-Spielerdaten.")
+                            client_view_data["player_id"] = None
+                            client_view_data["player_name"] = None
+                            client_view_data["role"] = None
+                            client_view_data["confirmed_for_lobby"] = False
                             client_view_data["player_is_ready"] = False
+                            # join_error und error_message von Server übernehmen
+                            if message.get("join_error"):
+                                client_view_data["join_error"] = message["join_error"]
+                            if message.get("error_message"):
+                                client_view_data["error_message"] = message["error_message"]
+
                         elif "player_id" in message and message["player_id"] is not None:
-                            client_view_data["player_id"] = message["player_id"]; client_view_data["join_error"] = None
-                        
+                            # Erfolgreicher Join, Rejoin oder reguläres Update mit gültiger ID
+                            if client_view_data["player_id"] != message["player_id"]:
+                                print(f"CLIENT: Eigene Player ID vom Server erhalten/geändert zu: {message['player_id']}")
+                            client_view_data["player_id"] = message["player_id"]
+                            client_view_data["join_error"] = None # Erfolgreich beigetreten/rejoined -> kein Join-Error mehr
+
+                        # Aktualisiere andere Schlüssel in client_view_data mit den empfangenen Werten
                         update_keys = [
-                            "player_name", "role", "confirmed_for_lobby", "player_is_ready", 
-                            "player_status", "location", "game_state", "lobby_players", 
-                            "all_players_status", "current_task", "hider_leaderboard", 
-                            "hider_locations", # "power_ups_available" wurde entfernt
+                            "player_name", "role", "confirmed_for_lobby", "player_is_ready",
+                            "player_status", "location", "game_state", "lobby_players",
+                            "all_players_status", "current_task", "hider_leaderboard",
+                            "hider_locations",
                             "hider_location_update_imminent",
                             "early_end_requests_count", "total_active_players_for_early_end",
-                            "player_has_requested_early_end", "task_skips_available" 
+                            "player_has_requested_early_end", "task_skips_available"
                         ]
                         for key in update_keys:
                             if key in message: client_view_data[key] = message[key]
-                        
-                        if message.get("error_message") and message["player_id"] is None:
-                            client_view_data["error_message"] = message["error_message"]
-                            client_view_data["join_error"] = message["error_message"]
 
                     elif msg_type == "server_text_notification":
                         game_msg_text = message.get("message", "Server Nachricht")
@@ -182,49 +265,82 @@ def network_communication_thread():
                              show_termux_notification(title="Hide and Seek", content="Seeker: Hider-Standorte aktualisiert!", notification_id="seeker_update" )
                         elif event_name == "game_started":
                             show_termux_notification(title="Hide and Seek", content="Das Spiel hat begonnen!", notification_id="game_start")
-                        
-                    elif msg_type == "error":
+
+                    elif msg_type == "error": # Generische Fehlermeldung vom Server
                         error_text = message.get("message", "Unbekannter Fehler vom Server")
                         client_view_data["error_message"] = error_text
-                        critical_errors = ["Spiel läuft bereits", "Spiel voll", "Nicht authentifiziert", "Bitte neu beitreten", "Du bist nicht mehr Teil des aktuellen Spiels", "Server wurde von einem Spieler zurückgesetzt"]
+                        # Kritische Fehler, die eine Rückkehr zum Join-Screen rechtfertigen
+                        critical_errors = [
+                            "Spiel läuft bereits", "Spiel voll", "Nicht authentifiziert",
+                            "Bitte neu beitreten", "Du bist nicht mehr Teil des aktuellen Spiels",
+                            "Server wurde von einem Spieler zurückgesetzt", "Rejoin fehlgeschlagen" # Wichtig für Rejoin-Fehler
+                        ]
                         if any(crit_err in error_text for crit_err in critical_errors):
-                            client_view_data["join_error"] = error_text
-                            if client_view_data["player_id"] is not None:
-                                client_view_data["player_id"] = None; client_view_data["player_name"] = None
+                            client_view_data["join_error"] = error_text # Als Join-Fehler markieren
+                            if client_view_data["player_id"] is not None: # Wenn wir eine ID hatten, aber sie jetzt ungültig ist
+                                print(f"CLIENT: Kritischer Fehler vom Server '{error_text}'. Resette player_id.")
+                                client_view_data["player_id"] = None
+                                client_view_data["player_name"] = None
                                 client_view_data["role"] = None
-                    
+                                client_view_data["confirmed_for_lobby"] = False
+                                client_view_data["player_is_ready"] = False
+
                     elif msg_type == "acknowledgement":
                         ack_message = message.get("message", "Aktion bestätigt.")
                         client_view_data["game_message"] = ack_message
 
-        except json.JSONDecodeError: buffer = ""
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            is_connected_to_server = False
-            with client_data_lock: client_view_data["game_state"]["status_display"] = "Verbindung getrennt (Empfang)."
-        except Exception: is_connected_to_server = False
-        finally: 
-            if not is_connected_to_server:
-                with client_data_lock: client_view_data["is_socket_connected_to_server"] = False
-                if server_socket_global:
-                    try: server_socket_global.close()
-                    except: pass
-                    server_socket_global = None
+        except json.JSONDecodeError:
+            print(f"CLIENT NET (JSON DECODE ERROR): Buffer war '{buffer[:200]}...'")
+            with client_data_lock: client_view_data["error_message"] = "Fehlerhafte Daten vom Server empfangen."
+            buffer = "" # Puffer löschen, um Endlosschleife bei korrupten Daten zu vermeiden
+        except (ConnectionResetError, BrokenPipeError, OSError) as e_recv:
+            print(f"CLIENT NET (RECEIVE ERROR - COMM): Verbindung getrennt (Empfang): {e_recv}")
+            with client_data_lock:
+                client_view_data["is_socket_connected_to_server"] = False
+                client_view_data["game_state"]["status_display"] = f"Verbindung getrennt (Empfang): {type(e_recv).__name__}"
+        except Exception as e_recv_main:
+            print(f"CLIENT NET (RECEIVE ERROR - UNEXPECTED): Unerwarteter Fehler beim Empfang: {e_recv_main}")
+            traceback.print_exc()
+            with client_data_lock:
+                client_view_data["is_socket_connected_to_server"] = False # Bei unerwartetem Fehler Verbindung als unsicher ansehen
+                client_view_data["error_message"] = "Interner Client-Fehler beim Empfang von Serverdaten."
+        finally:
+            # Dieser Block wird immer ausgeführt, wenn der Try-Block endet (normal oder durch Exception)
+            is_still_connected_after_loop = False
+            with client_data_lock:
+                is_still_connected_after_loop = client_view_data["is_socket_connected_to_server"]
 
-@app.route('/') 
+            if not is_still_connected_after_loop: # Wenn die Verbindung im Laufe des Try-Blocks verloren ging
+                if server_socket_global:
+                    try: server_socket_global.close() # Socket schließen
+                    except: pass
+                    server_socket_global = None # Referenz auf Socket entfernen
+                # Der status_display wird bereits in den except-Blöcken gesetzt.
+                time.sleep(1) # Kurze Pause, um CPU-Last bei schnellen Reconnect-Versuchen zu reduzieren
+
+
+# --- Flask Webserver Routen ---
+
+@app.route('/')
 def index_page_route(): return send_from_directory(app.static_folder, 'index.html')
+
 @app.route('/manifest.json')
 def manifest_route(): return send_from_directory(app.static_folder, 'manifest.json')
+
 @app.route('/sw.js')
 def service_worker_route(): return send_from_directory(app.static_folder, 'sw.js', mimetype='application/javascript')
+
 @app.route('/offline.html')
 def offline_route(): return send_from_directory(app.static_folder, 'offline.html')
-@app.route('/icons/<path:filename>') 
+
+@app.route('/icons/<path:filename>')
 def icons_route(filename): return send_from_directory(app.static_folder, f'icons/{filename}')
 
 @app.route('/status', methods=['GET'])
 def get_status():
+    """Gibt den aktuellen Zustand des Clients als JSON für die UI zurück."""
     with client_data_lock:
-        client_view_data["current_server_host"] = SERVER_HOST
+        client_view_data["current_server_host"] = SERVER_HOST # Sicherstellen, dass die UI den aktuellen Host/Port kennt
         client_view_data["current_server_port"] = SERVER_PORT
         data_to_send = client_view_data.copy()
         data_to_send["session_nickname"] = session.get("nickname")
@@ -233,7 +349,8 @@ def get_status():
 
 @app.route('/join_game', methods=['POST'])
 def join_game_route():
-    global SERVER_HOST, SERVER_PORT, is_connected_to_server, server_socket_global
+    """Verarbeitet die Beitrittsanfrage eines Spielers."""
+    global SERVER_HOST, SERVER_PORT, server_socket_global
     data = request.get_json();
     if not data: return jsonify({"success": False, "message": "Keine Daten."}), 400
 
@@ -246,119 +363,145 @@ def join_game_route():
     try: new_server_port = int(new_server_port_str)
     except ValueError: return jsonify({"success": False, "message": "Ungültiger Server-Port."}), 400
 
-    session["nickname"], session["role_choice"] = nickname, role_choice
-    
+    session["nickname"], session["role_choice"] = nickname, role_choice # Speichere in Flask-Session für Prefill
+
     server_details_changed = False
     with client_data_lock:
+        # Prüfe, ob sich Host oder Port geändert haben
         if SERVER_HOST != new_server_host or SERVER_PORT != new_server_port:
             SERVER_HOST, SERVER_PORT = new_server_host, new_server_port
             client_view_data["current_server_host"], client_view_data["current_server_port"] = SERVER_HOST, SERVER_PORT
             server_details_changed = True
-        
+
+        # Initialisiere/Setze den Spielerzustand für den Join-Versuch zurück
+        # player_id MUSS None sein, damit der Server es als neuen Join erkennt, nicht als Rejoin.
         client_view_data.update({
-            "player_id": None, "player_name": nickname, "role": role_choice,
+            "player_id": None, # Wichtig: Resette die ID für einen neuen Join-Versuch
+            "player_name": nickname, # Wird für JOIN_GAME an Server gesendet
+            "role": role_choice,     # Wird für JOIN_GAME an Server gesendet
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "join_error": None, "error_message": None, "game_message": None,
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
-            # "power_ups_available" wurde entfernt
             "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0 
+            "player_has_requested_early_end": False, "task_skips_available": 0
         })
-        if "game_state" not in client_view_data or client_view_data["game_state"] is None: 
+        # game_state sollte mindestens einen Basiswert haben
+        if "game_state" not in client_view_data or client_view_data["game_state"] is None:
             client_view_data["game_state"] = {"status": "disconnected", "status_display": "Initialisiere..."}
-        
+
         if server_details_changed:
             client_view_data["game_state"]["status_display"] = f"Serveradresse aktualisiert. Verbinde mit {SERVER_HOST}:{SERVER_PORT}..."
-            client_view_data["is_socket_connected_to_server"] = False
-            is_connected_to_server = False 
-            if server_socket_global:
+            client_view_data["is_socket_connected_to_server"] = False # Signal an Netzwerk-Thread: Neu verbinden
+            if server_socket_global: # Schließe alte Verbindung sofort
                 try: server_socket_global.shutdown(socket.SHUT_RDWR); server_socket_global.close()
                 except OSError: pass
                 server_socket_global = None
-        else: client_view_data["game_state"]["status_display"] = f"Sende Beitrittsanfrage als {nickname}..."
-    
+        else:
+             client_view_data["game_state"]["status_display"] = f"Sende Beitrittsanfrage als {nickname}..."
+
+
     response_for_js = {"success": True, "message": "Beitrittsanfrage wird verarbeitet."}
     if server_details_changed:
         response_for_js = {"success": True, "message": "Serveradresse geändert. Verbindung wird neu aufgebaut."}
+        # Der Netzwerk-Thread wird die neue Verbindung herstellen. Da player_id None ist, wird kein Rejoin gesendet.
+        # Der User muss dann manuell (oder automatisch, wenn der Netzwerk-Thread JOIN_GAME bei connect senden würde) den JOIN_GAME senden.
+        # Aktuell muss der User nach einem Serverwechsel/Verbindungsabbruch und erfolgreicher Verbindung erneut auf "Spiel suchen & Registrieren" klicken.
+        # Dies ist eine bewusste Entscheidung, um Kontrolle über den Beitrittszeitpunkt zu geben.
     else:
+        # Nur JOIN_GAME senden, wenn die Socket-Verbindung aktiv ist
         socket_conn_ok = False
         with client_data_lock: socket_conn_ok = client_view_data.get("is_socket_connected_to_server", False)
-        if socket_conn_ok and is_connected_to_server:
-            if not send_message_to_server({"action": "JOIN_GAME", "name": nickname, "role": role_choice}):
+
+        if socket_conn_ok: # Verbindung besteht zum Server
+            # `send_message_to_server` aktualisiert `is_socket_connected_to_server` bei Misserfolg.
+            if not send_message_to_server({"action": "JOIN_GAME", "name": nickname, "role_preference": role_choice}): # "role" -> "role_preference" (Server-seitig)
                 response_for_js = {"success": False, "message": "Senden der Join-Anfrage fehlgeschlagen."}
                 with client_data_lock: client_view_data["join_error"] = "Senden der Join-Anfrage fehlgeschlagen."
-        else:
-            with client_data_lock: 
+        else: # Keine Verbindung, der Netzwerk-Thread sollte versuchen, sich zu verbinden
+            with client_data_lock:
                 client_view_data["join_error"] = "Nicht mit Server verbunden. Warte auf Verbindung..."
                 client_view_data["game_state"]["status_display"] = f"Warte auf Verbindung zu {SERVER_HOST}:{SERVER_PORT} für Join als {nickname}..."
-            response_for_js = {"success": True, "message": "Keine Serververbindung. Warte auf automatische Verbindung..."} 
-            
-    with client_data_lock: 
-        current_status = client_view_data.copy()
-        current_status["session_nickname"] = session.get("nickname")
-        current_status["session_role_choice"] = session.get("role_choice")
-    current_status["join_attempt_response"] = response_for_js
-    return jsonify(current_status)
+            response_for_js = {"success": True, "message": "Keine Serververbindung. Warte auf automatische Verbindung..."}
+            # Hier wird kein JOIN_GAME gesendet, da keine Verbindung besteht. Der Netzwerk-Thread wird
+            # versuchen, sich zu verbinden, und wenn die Verbindung steht, wird der User die UI aktualisieren.
+
+    with client_data_lock:
+        current_status_payload = client_view_data.copy() # Kopie für die Antwort
+        current_status_payload["session_nickname"] = session.get("nickname") # Flask Session Daten mitsenden
+        current_status_payload["session_role_choice"] = session.get("role_choice")
+    current_status_payload["join_attempt_response"] = response_for_js # Füge die spezifische Join-Antwort hinzu
+    return jsonify(current_status_payload)
 
 @app.route('/update_location_from_browser', methods=['POST'])
 def update_location_from_browser():
+    """Empfängt Standortdaten vom Browser und leitet sie an den Spielserver weiter."""
     data = request.get_json()
     if not data: return jsonify({"success": False, "message": "Keine Daten."}), 400
     lat, lon, accuracy = data.get('lat'), data.get('lon'), data.get('accuracy')
     if lat is None or lon is None or accuracy is None: return jsonify({"success": False, "message": "Unvollständige Standortdaten."}), 400
 
     player_id_local, game_status_local, socket_ok_local = None, None, False
-    with client_data_lock:
+    with client_data_lock: # Daten unter Lock lesen
         player_id_local = client_view_data.get("player_id")
         game_status_local = client_view_data.get("game_state", {}).get("status")
         socket_ok_local = client_view_data.get("is_socket_connected_to_server", False)
 
+    # Standortupdates nur senden, wenn Spieler bekannt und im relevanten Spielstatus
     game_can_receive_loc = game_status_local in [GAME_STATE_LOBBY, GAME_STATE_HIDER_WAIT, GAME_STATE_RUNNING]
-    if player_id_local and game_can_receive_loc and socket_ok_local and is_connected_to_server:
+    if player_id_local and game_can_receive_loc and socket_ok_local:
         send_success = send_message_to_server({"action": "UPDATE_LOCATION", "lat": lat, "lon": lon, "accuracy": accuracy})
-        if send_success: 
-            with client_data_lock: client_view_data["location"] = [lat, lon, accuracy]
+        if send_success:
+            with client_data_lock: client_view_data["location"] = [lat, lon, accuracy] # Lokales UI-Update
             return jsonify({"success": True, "message": "Standort an Server gesendet."})
         else: return jsonify({"success": False, "message": "Senden an Server fehlgeschlagen."}), 500
-    elif not player_id_local: return jsonify({"success":False, "message":"Keine Spieler-ID."}), 403
+    elif not player_id_local: return jsonify({"success":False, "message":"Keine Spieler-ID bekannt. Bitte zuerst beitreten."}), 403
     elif not game_can_receive_loc: return jsonify({"success":False, "message":f"Spielstatus '{game_status_local}' erlaubt keine Standortupdates."}), 400
-    else: return jsonify({"success": False, "message": "Keine Serververbindung (Socket)."}), 503
+    else: return jsonify({"success": False, "message": "Keine aktive Socket-Verbindung zum Spielserver."}), 503
 
 def handle_generic_action(action_name, payload_key=None, payload_value_from_request=None, requires_player_id=True):
+    """
+    Hilfsfunktion zum Senden generischer Aktionen an den Server.
+    Prüft Player-ID und Sendeerfolg.
+    """
     action_payload = {"action": action_name}; player_id_for_action = None
-    
+
     if requires_player_id:
         with client_data_lock: player_id_for_action = client_view_data.get("player_id")
         if not player_id_for_action:
-            with client_data_lock: 
-                temp_cvd = client_view_data.copy() 
+            # Wenn keine Spieler-ID bekannt ist, können die meisten Aktionen nicht ausgeführt werden.
+            with client_data_lock:
+                temp_cvd = client_view_data.copy()
                 temp_cvd["session_nickname"] = session.get("nickname")
                 temp_cvd["session_role_choice"] = session.get("role_choice")
             return jsonify({"success": False, "message": f"Aktion '{action_name}' nicht möglich (keine Spieler-ID).", **temp_cvd }), 403
-    
-    if payload_key:
+
+    if payload_key: # Wenn zusätzliche Daten im Payload benötigt werden
         req_data = request.get_json()
-        if req_data is None and payload_key != "ready_status": return jsonify({"success": False, "message": "Keine JSON-Daten."}), 400
+        if req_data is None and payload_key != "ready_status": return jsonify({"success": False, "message": "Keine JSON-Daten im Request."}), 400
         val_from_req = req_data.get(payload_value_from_request or payload_key) if req_data else None
+
         if payload_key == "ready_status":
-             if not isinstance(val_from_req, bool): return jsonify({"success": False, "message": "Ungültiger Wert für ready_status."}), 400
-        elif val_from_req is None and payload_key != "force_server_reset":
-            return jsonify({"success": False, "message": f"Fehlender Wert für '{payload_key}'."}), 400
-        if val_from_req is not None or payload_key != "force_server_reset":
-            action_payload[payload_key] = val_from_req
-    
-    success_sent = send_message_to_server(action_payload) 
+             if not isinstance(val_from_req, bool): return jsonify({"success": False, "message": "Ungültiger Wert für ready_status (muss boolean sein)."}), 400
+        elif val_from_req is None and payload_key != "force_server_reset": # force_server_reset hat keinen Wert
+            return jsonify({"success": False, "message": f"Fehlender Wert für '{payload_key}' in Request-Daten."}), 400
+
+        if val_from_req is not None or payload_key == "force_server_reset_from_ui": # Payload hinzufügen, wenn Wert da ist oder es ein Reset ist
+            action_payload[payload_key] = val_from_req # Wichtig: für force_server_reset_from_ui wird val_from_req None sein, was passt
+
+    # Sende die Nachricht an den Server
+    success_sent = send_message_to_server(action_payload)
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None 
-        client_view_data["current_server_host"] = SERVER_HOST 
+        if success_sent: client_view_data["error_message"] = None # Wenn erfolgreich gesendet, Fehler löschen
+        client_view_data["current_server_host"] = SERVER_HOST
         client_view_data["current_server_port"] = SERVER_PORT
-        response_data = client_view_data.copy(); 
-        response_data["action_send_success"] = success_sent 
+        response_data = client_view_data.copy(); # Status an UI zurücksenden
+        response_data["action_send_success"] = success_sent # Info über Sendeerfolg
         response_data["session_nickname"] = session.get("nickname")
         response_data["session_role_choice"] = session.get("role_choice")
     return jsonify(response_data)
 
+# --- Flask Routen für Spielaktionen ---
 @app.route('/confirm_lobby_join', methods=['POST'])
 def confirm_lobby_join_route(): return handle_generic_action("CONFIRM_LOBBY_JOIN")
 @app.route('/set_ready', methods=['POST'])
@@ -367,63 +510,83 @@ def set_ready_route(): return handle_generic_action("SET_READY", "ready_status",
 def complete_task_route(): return handle_generic_action("TASK_COMPLETE")
 @app.route('/catch_hider', methods=['POST'])
 def catch_hider_route(): return handle_generic_action("CATCH_HIDER", "hider_id_to_catch", "hider_id_to_catch")
-# @app.route('/use_powerup', methods=['POST']) wurde entfernt
+@app.route('/request_early_round_end_action', methods=['POST'])
+def request_early_round_end_action_route(): return handle_generic_action("REQUEST_EARLY_ROUND_END")
+@app.route('/skip_task', methods=['POST'])
+def skip_task_route(): return handle_generic_action("SKIP_TASK")
+@app.route('/force_server_reset_from_ui', methods=['POST'])
+# requires_player_id=False, da dies von jedem Client (auch unregistrierten) gesendet werden kann
+def force_server_reset_route(): return handle_generic_action("FORCE_SERVER_RESET_FROM_CLIENT", requires_player_id=False)
 
 @app.route('/leave_game_and_go_to_join_screen', methods=['POST'])
 def leave_game_and_go_to_join_screen_route():
+    """
+    Verarbeitet die Anfrage, das aktuelle Spiel zu verlassen und zum Join-Bildschirm zurückzukehren.
+    Setzt den lokalen Client-Zustand sofort zurück und versucht dann, den Server zu informieren.
+    """
     action_sent_successfully = False; message_to_user = "Versuche, Spiel zu verlassen..."
     original_player_id_if_any = None
     with client_data_lock: original_player_id_if_any = client_view_data.get("player_id")
-    
+
+    # Wichtig: Lokalen Client-Zustand sofort zurücksetzen,
+    # damit die UI ohne Verzögerung zum Join-Screen wechselt.
     with client_data_lock:
         client_view_data.update({
-            "player_id": None, "player_name": None, "role": None,
+            "player_id": None, "player_name": None, "role": None, # IMMEDIATE RESET
             "confirmed_for_lobby": False, "player_is_ready": False, "player_status": "active",
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
-            # "power_ups_available" wurde entfernt
-            "game_message": None, "error_message": None, "join_error": None, 
+            "game_message": None, "error_message": None, "join_error": None, # Alte Nachrichten/Fehler löschen
             "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0 
+            "player_has_requested_early_end": False, "task_skips_available": 0
         })
+        # Setze game_state in einen neutralen Zustand
         if "game_state" in client_view_data and client_view_data["game_state"] is not None:
-            client_view_data["game_state"]["status"] = GAME_STATE_LOBBY 
+            client_view_data["game_state"]["status"] = GAME_STATE_LOBBY # Lobby ist ein guter neutraler Startpunkt
             client_view_data["game_state"]["status_display"] = "Zurück zum Beitrittsbildschirm..."
-            client_view_data["game_state"]["game_over_message"] = None 
+            client_view_data["game_state"]["game_over_message"] = None
 
+    # Versuche, den Server über das Verlassen zu informieren, aber ignoriere Fehler,
+    # da der lokale Reset bereits erfolgt ist.
     if original_player_id_if_any and send_message_to_server({"action": "LEAVE_GAME_AND_GO_TO_JOIN"}):
         action_sent_successfully = True; message_to_user = "Anfrage zum Verlassen an Server gesendet."
-        session.pop("nickname", None); session.pop("role_choice", None)
-        with client_data_lock: client_view_data["game_message"] = message_to_user 
-    elif original_player_id_if_any: 
+        session.pop("nickname", None); session.pop("role_choice", None) # Session-Daten löschen
+        with client_data_lock: client_view_data["game_message"] = message_to_user
+    elif original_player_id_if_any:
+        # Konnte Anfrage nicht senden, aber Client ist bereits zurückgesetzt
         message_to_user = "Konnte Verlassen-Anfrage nicht an Server senden. Clientseitig zurückgesetzt."
         with client_data_lock: client_view_data["error_message"] = message_to_user
-    else: 
+    else:
+        # Der Spieler war ohnehin nicht im Spiel, nur Client-Reset bestätigen
         action_sent_successfully = True; message_to_user = "Client zurückgesetzt (war nicht aktiv im Spiel)."
         session.pop("nickname", None); session.pop("role_choice", None)
         with client_data_lock: client_view_data["game_message"] = message_to_user
 
+    # Sende den aktualisierten Client-Zustand als Antwort an die UI
     with client_data_lock:
         client_view_data["current_server_host"] = SERVER_HOST
         client_view_data["current_server_port"] = SERVER_PORT
         response_payload = client_view_data.copy()
         response_payload["leave_request_info"] = {"sent_successfully": action_sent_successfully, "message": message_to_user}
-        response_payload["session_nickname"] = session.get("nickname") 
+        response_payload["session_nickname"] = session.get("nickname") # Aktualisierte Session-Daten mitsenden
         response_payload["session_role_choice"] = session.get("role_choice")
     return jsonify(response_payload)
 
-@app.route('/request_early_round_end_action', methods=['POST'])
-def request_early_round_end_action_route(): return handle_generic_action("REQUEST_EARLY_ROUND_END")
-@app.route('/skip_task', methods=['POST']) 
-def skip_task_route(): return handle_generic_action("SKIP_TASK")
-@app.route('/force_server_reset_from_ui', methods=['POST'])
-def force_server_reset_route(): return handle_generic_action("FORCE_SERVER_RESET_FROM_CLIENT", requires_player_id=False)
 
 if __name__ == '__main__':
-    with client_data_lock: 
+    # Initialisiere traceback für bessere Fehlermeldungen in Threads
+    import traceback
+
+    with client_data_lock:
         client_view_data["game_state"]["status_display"] = "Initialisiere Client Flask-App..."
-        client_view_data["current_server_host"] = SERVER_HOST 
-        client_view_data["current_server_port"] = SERVER_PORT 
-    
+        client_view_data["current_server_host"] = SERVER_HOST
+        client_view_data["current_server_port"] = SERVER_PORT
+
+    # Starte den Netzwerk-Kommunikations-Thread als Daemon-Thread
+    # Daemon-Threads werden beendet, wenn das Hauptprogramm endet.
     threading.Thread(target=network_communication_thread, daemon=True).start()
+
+    # Starte die Flask-Web-App
+    # host='0.0.0.0' macht die App von außen erreichbar (z.B. für Browser auf dem Handy)
+    # debug=False für den Produktionseinsatz
     app.run(host='0.0.0.0', port=FLASK_PORT, debug=False)
