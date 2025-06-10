@@ -2,6 +2,7 @@ HIDE AND SEEK TO DO
 - Zone?
 - Power Ups des suchers anpassen
 - Hider versteckzeit skippen
-- server verbinden klarer machen.
+- server verbinden klarer machen (zuerst eigene seite zum verbinden, dann ist man direkt in der Lobby wo man seinen Namen und Rolle angeben kann.)
 - auch wärend dem spiel joinen.
 - UI aufräumen
+- Rolle immer vor spiel Wählen können
