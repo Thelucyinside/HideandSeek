@@ -172,6 +172,12 @@
                 <input type="text" id="server-address" name="server_address" placeholder="host:port (Standard-Port: 65432)" required>
                 <button id="connect-to-server-button">Mit Server verbinden</button>
             </div>
+
+            <!-- Unauffälliger Server-Reset am Ende der Seite -->
+            <div id="server-management-container">
+                <button id="force-server-reset-button" class="danger-btn">Server für alle zurücksetzen (Notfall)</button>
+                <p>Achtung: Nutzt die oben eingegebene Adresse. Setzt das Spiel für alle Spieler auf eine neue Lobby zurück.</p>
+            </div>
         </div>
 
         <!-- Schritt 2: Lobby-Registrierung -->
@@ -300,12 +306,6 @@
              <p class="dimmed centered-text" style="margin-top:15px;">Du wirst in Kürze zur Lobby zurückgebracht...</p>
              <button id="leave-game-now-button" class="action-btn" onclick="handleLeaveAndGoToJoinScreen()">Sofort zur Serverauswahl</button>
         </div>
-
-        <!-- Unauffälliger Server-Reset am Ende der Seite -->
-        <div id="server-management-container" class="section">
-            <button id="force-server-reset-button" class="danger-btn">Server für alle zurücksetzen</button>
-            <p>Achtung: Dies startet für alle Spieler eine neue Lobby.</p>
-        </div>
     </div>
 
     <script>
@@ -398,8 +398,8 @@
             }
             toggleNotification('error-message', data.error_message || data.join_error);
             
-            toggleVisibility('server-management-container', isSocketConnected);
-            if($('#force-server-reset-button')) $('#force-server-reset-button').disabled = !isSocketConnected;
+            // HINWEIS: Die Sichtbarkeit von #server-management-container wird jetzt durch seine Eltern-Sektion (#connect-section) gesteuert.
+            if($('#force-server-reset-button')) $('#force-server-reset-button').disabled = false; // Reset-Button ist immer aktiv, wenn sichtbar.
 
             // --- Haupt-Ansichten-Logik ---
             if (!userHasInitiatedConnection) {
@@ -619,6 +619,7 @@
                 errorData.is_socket_connected_to_server = false;
                 updateUI(errorData);
             } finally {
+                 // Re-enable the button for most actions, but not for ones that cause a definite state change
                 if (triggeringButton && !['/complete_task', '/set_ready', '/return_to_registration'].includes(endpoint)) {
                     triggeringButton.disabled = false;
                 }
@@ -729,9 +730,29 @@
             });
             $('#request-early-end-button')?.addEventListener('click', (event) => sendClientAction('/request_early_round_end_action', null, event.target));
             $('#skip-task-button')?.addEventListener('click', (event) => sendClientAction('/skip_task', null, event.target));
-            $('#force-server-reset-button')?.addEventListener('click', (event) => {
-                if (confirm("Bist du sicher, dass du den Spielserver für ALLE Spieler zurücksetzen möchtest?")) {
-                    sendClientAction('/force_server_reset_from_ui', null, event.target);
+            
+            // NEUE, ROBUSTERE LOGIK FÜR DEN RESET-BUTTON
+            $('#force-server-reset-button')?.addEventListener('click', async (event) => {
+                const serverAddress = $('#server-address').value;
+                if (!serverAddress) {
+                    toggleNotification('error-message', 'Bitte zuerst eine Server-Adresse für den Reset eingeben.');
+                    return;
+                }
+                
+                if (confirm(`Bist du sicher, dass du den Server unter '${serverAddress}' für ALLE Spieler zurücksetzen möchtest?\n\n(Hinweis: Zuerst wird eine Verbindung aufgebaut. Klicke den Button danach ggf. erneut, falls der erste Versuch fehlschlägt.)`)) {
+                    const button = event.target;
+                    button.disabled = true;
+
+                    // Schritt 1: Stelle sicher, dass der Client-Proxy (client.py) die richtige Server-Adresse kennt.
+                    // Dies ist die gleiche Aktion wie beim Klick auf "Mit Server verbinden".
+                    await sendClientAction('/connect_to_server', { server_address: serverAddress }, button);
+
+                    // Schritt 2: Sende sofort den Reset-Befehl. 
+                    // Dies kann fehlschlagen, wenn die TCP-Verbindung noch nicht steht. Das ist okay.
+                    // Der Benutzer wurde angewiesen, es ggf. erneut zu versuchen.
+                    await sendClientAction('/force_server_reset_from_ui', null, button);
+                    
+                    button.disabled = false; // Button wieder aktivieren.
                 }
             });
         });
