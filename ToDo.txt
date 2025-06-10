@@ -5,6 +5,7 @@ Spiel:
 - eingaben auf website in datei cachen für schnellere eingabe (✓)
 - Zone?
 - Power Ups des suchers anpassen
+- Offline Zeitrunterzählen erlauben.
 
 Entwicklung:
 - Entwicklermodus (kürzere Zeit zum Testen)
