@@ -546,11 +546,16 @@
             const earlyEndVoteInfo = $('#early-end-vote-info');
             // Zeige den Early-End-Vote nur an, wenn der Spieler eine ID hat, aktiv ist und das Spiel läuft oder in der Hider-Wartezeit ist.
             if ((serverGameStatus === GAME_STATE_RUNNING || serverGameStatus === GAME_STATE_HIDER_WAIT) && data.player_id && data.player_status === 'active') {
-                toggleDisplay(earlyEndVoteContainer.id, true);
-                earlyEndVoteButton.disabled = data.player_has_requested_early_end || !isSocketConnected; // Deaktiviere, wenn bereits abgestimmt oder Socket getrennt
-                earlyEndVoteButton.textContent = data.player_has_requested_early_end ? 'Abstimmung gesendet' : 'Runde vorzeitig beenden';
-                earlyEndVoteInfo.textContent = `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`;
-            } else { toggleDisplay(early-end-vote-container.id, false); }
+                if (earlyEndVoteContainer) toggleDisplay(earlyEndVoteContainer.id, true);
+                if (earlyEndVoteButton) {
+                    earlyEndVoteButton.disabled = data.player_has_requested_early_end || !isSocketConnected; // Deaktiviere, wenn bereits abgestimmt oder Socket getrennt
+                    earlyEndVoteButton.textContent = data.player_has_requested_early_end ? 'Abstimmung gesendet' : 'Runde vorzeitig beenden';
+                }
+                if (earlyEndVoteInfo) earlyEndVoteInfo.textContent = `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`;
+            } else {
+                // KORREKTUR HIER:
+                toggleDisplay('early-end-vote-container', false);
+            }
 
             // Server Management Container
             const serverMgmtContainer = $('#server-management-container');
@@ -568,30 +573,33 @@
                 // Setze die Nickname- und Rollen-Eingabefelder vorab, falls Werte in Session oder Vorschlag da sind
                 const nicknameInput = $('#nickname'); const roleChoiceInput = $('#role-choice');
                 const serverHostInput = $('#server-host'); const serverPortInput = $('#server-port');
-                if (document.activeElement !== nicknameInput) { // Nur aktualisieren, wenn User nicht gerade tippt
+                if (nicknameInput && document.activeElement !== nicknameInput) { // Nur aktualisieren, wenn User nicht gerade tippt
                     if (data.player_name) nicknameInput.value = data.player_name; // Vom Server (z.B. bei Join-Fehler)
                     else if (data.session_nickname) nicknameInput.value = data.session_nickname; // Aus der Flask-Session
                     else if (data.prefill_nickname && (nicknameInput.value === "" || nicknameInput.value.startsWith("Spieler"))) nicknameInput.value = data.prefill_nickname;
                 }
-                if (document.activeElement !== roleChoiceInput) {
+                if (roleChoiceInput && document.activeElement !== roleChoiceInput) {
                     if (data.role) roleChoiceInput.value = data.role;
                     else if (data.session_role_choice) roleChoiceInput.value = data.session_role_choice;
                 }
                 // Serverdetails aus den Client-Daten oder localStorage vorfüllen
-                if (document.activeElement !== serverHostInput) {
+                if (serverHostInput && document.activeElement !== serverHostInput) {
                     if (data.current_server_host) serverHostInput.value = data.current_server_host;
                     else { const ld = loadServerDetails(); if (ld.host) serverHostInput.value = ld.host; }
                 }
-                if (document.activeElement !== serverPortInput) {
+                if (serverPortInput && document.activeElement !== serverPortInput) {
                     if (data.current_server_port) serverPortInput.value = data.current_server_port;
                     else { const ld = loadServerDetails(); if (ld.port) serverPortInput.value = ld.port; }
                 }
 
                 // Join-Button aktivieren, wenn Eingaben da sind. Das eigentliche Senden hängt vom Socket ab.
-                $('#join-game-button').disabled = false;
+                const joinGameButton = $('#join-game-button');
+                if (joinGameButton) joinGameButton.disabled = false;
                 // Wenn player_name bekannt, aber keine player_id (z.B. nach JOIN_GAME, aber Server hat noch nicht geantwortet)
                 if (data.player_name && !data.player_id && isSocketConnected && serverGameStatus !== "disconnected") {
                     setText('join-game-status-display', serverGameStatusDisplay || "Sende Beitrittsanfrage...");
+                } else if (!isSocketConnected) { // Wenn keine Socket-Verbindung, zeige den Status vom Server an
+                    setText('join-game-status-display', serverGameStatusDisplay);
                 }
 
             } else { // Spieler hat eine gültige ID vom Server erhalten
@@ -615,9 +623,11 @@
                     setText('pending-lobby-player-name', data.player_name || "Dein Name");
                     setText('pending-lobby-player-role-wish', data.role || "Deine Rolle");
                     setText('pending-lobby-socket-status-display', isSocketConnected ? "Verbunden" : "Nicht verbunden");
-                    $('#pending-lobby-socket-status-display').className = isSocketConnected ? 'status-connected' : 'status-disconnected';
+                    const pendingLobbySocketStatusEl = $('#pending-lobby-socket-status-display');
+                    if(pendingLobbySocketStatusEl) pendingLobbySocketStatusEl.className = isSocketConnected ? 'status-connected' : 'status-disconnected';
                     setText('pending-lobby-game-status-display', serverGameStatusDisplay);
-                    $('#confirm-lobby-join-button').disabled = !isSocketConnected; // Button nur aktiv, wenn Socket verbunden
+                    const confirmLobbyButton = $('#confirm-lobby-join-button');
+                    if(confirmLobbyButton) confirmLobbyButton.disabled = !isSocketConnected; // Button nur aktiv, wenn Socket verbunden
                 } else if (!data.confirmed_for_lobby && serverGameStatus === GAME_STATE_LOBBY) {
                     // Sollte durch is_waiting_for_lobby eigentlich nicht erreicht werden,
                     // falls Spieler bereits in "waiting_for_lobby" war und nun die Lobby startet.
@@ -626,17 +636,21 @@
                     setText('pending-lobby-player-name', data.player_name || "Dein Name");
                     setText('pending-lobby-player-role-wish', data.role || "Deine Rolle");
                     setText('pending-lobby-socket-status-display', isSocketConnected ? "Verbunden" : "Nicht verbunden");
-                    $('#pending-lobby-socket-status-display').className = isSocketConnected ? 'status-connected' : 'status-disconnected';
+                    const pendingLobbySocketStatusEl = $('#pending-lobby-socket-status-display');
+                    if(pendingLobbySocketStatusEl) pendingLobbySocketStatusEl.className = isSocketConnected ? 'status-connected' : 'status-disconnected';
                     setText('pending-lobby-game-status-display', serverGameStatusDisplay);
-                    $('#confirm-lobby-join-button').disabled = !isSocketConnected;
+                    const confirmLobbyButton = $('#confirm-lobby-join-button');
+                    if(confirmLobbyButton) confirmLobbyButton.disabled = !isSocketConnected;
                 } else if (data.confirmed_for_lobby && serverGameStatus === GAME_STATE_LOBBY) {
                     // Spieler ist in der Lobby und hat bestätigt
                     show('lobby-section');
                     updateLobbyPlayerList(data.lobby_players, String(data.player_id));
                     const readyButton = $('#ready-button');
-                    readyButton.textContent = data.player_is_ready ? 'Status: Bereit (Klick zum Ändern)' : 'Klicken: Ich bin bereit!';
-                    readyButton.className = data.player_is_ready ? 'unready' : 'ready';
-                    readyButton.disabled = !isSocketConnected; // Button nur aktiv, wenn Socket verbunden
+                    if (readyButton) {
+                        readyButton.textContent = data.player_is_ready ? 'Status: Bereit (Klick zum Ändern)' : 'Klicken: Ich bin bereit!';
+                        readyButton.className = data.player_is_ready ? 'unready' : 'ready';
+                        readyButton.disabled = !isSocketConnected; // Button nur aktiv, wenn Socket verbunden
+                    }
                 } else if (serverGameStatus === GAME_STATE_HIDER_WAIT) {
                     // Hider-Vorbereitungszeit
                     toggleDisplay('hider-wait-countdown-container', true);
@@ -648,7 +662,7 @@
                         // NEU: Anzeige von Pre-cached Tasks
                         const precachedTasksContainer = $('#hider-precached-tasks-container');
                         const precachedTasksList = $('#hider-precached-tasks-list');
-                        if (data.player_status === 'active' && !data.current_task && data.pre_cached_tasks && data.pre_cached_tasks.length > 0) {
+                        if (precachedTasksContainer && precachedTasksList && data.player_status === 'active' && !data.current_task && data.pre_cached_tasks && data.pre_cached_tasks.length > 0) {
                             toggleDisplay(precachedTasksContainer.id, true);
                             setHtml(precachedTasksList.id, ''); // Leeren
                             data.pre_cached_tasks.forEach(ptask => {
@@ -657,7 +671,7 @@
                                 precachedTasksList.appendChild(li);
                             });
                             toggleDisplay('hider-no-task-message', false); // Verstecke "Warte auf Aufgabe"
-                        } else {
+                        } else if (precachedTasksContainer) { // Nur verstecken, wenn das Element existiert
                             toggleDisplay(precachedTasksContainer.id, false);
                         }
 
@@ -677,16 +691,16 @@
                         // NEU: Anzeige von Pre-cached Tasks
                         const precachedTasksContainer = $('#hider-precached-tasks-container');
                         const precachedTasksList = $('#hider-precached-tasks-list');
-                        if (data.player_status === 'active' && !data.current_task && data.pre_cached_tasks && data.pre_cached_tasks.length > 0) {
+                         if (precachedTasksContainer && precachedTasksList && data.player_status === 'active' && !data.current_task && data.pre_cached_tasks && data.pre_cached_tasks.length > 0) {
                             toggleDisplay(precachedTasksContainer.id, true);
-                            setHtml(precachedTasksList.id, ''); // Leeren
+                            setHtml(precachedTasksList.id, ''); 
                             data.pre_cached_tasks.forEach(ptask => {
                                 const li = document.createElement('li');
                                 li.innerHTML = `<strong>${ptask.description}</strong> (${ptask.points} P.)`;
                                 precachedTasksList.appendChild(li);
                             });
-                             toggleDisplay('hider-no-task-message', false); // Verstecke "Warte auf Aufgabe"
-                        } else {
+                             toggleDisplay('hider-no-task-message', false); 
+                        } else if (precachedTasksContainer) { // Nur verstecken, wenn das Element existiert
                             toggleDisplay(precachedTasksContainer.id, false);
                         }
 
@@ -699,7 +713,8 @@
                     show('game-over-section');
                     setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
                     updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
-                    $('#go-to-registration-button').disabled = false; // Button zum Neuregistrieren aktivieren
+                    const goToRegButton = $('#go-to-registration-button');
+                    if(goToRegButton) goToRegButton.disabled = false; // Button zum Neuregistrieren aktivieren
                 }
             }
             // Standort-Updates starten/stoppen basierend auf dem Spielstatus und ob der Spieler eine ID hat
@@ -710,7 +725,7 @@
 
         function updateLobbyPlayerList(lobbyPlayers, currentPlayerIdStr) {
             const ul = $('#lobby-player-list'); setHtml('lobby-player-list', '');
-            if (lobbyPlayers && Object.keys(lobbyPlayers).length > 0) {
+            if (ul && lobbyPlayers && Object.keys(lobbyPlayers).length > 0) { // Check if ul exists
                 for (const pid in lobbyPlayers) {
                     const p = lobbyPlayers[pid]; const li = document.createElement('li');
                     let roleDisplay = p.role === 'hider' ? 'Hider' : (p.role === 'seeker' ? 'Seeker' : 'Unbekannt');
@@ -719,12 +734,12 @@
                     if (pid === currentPlayerIdStr) li.classList.add('highlight');
                     ul.appendChild(li);
                 }
-            } else { ul.innerHTML = '<li class="dimmed">Warte auf weitere Spieler...</li>'; }
+            } else if (ul) { ul.innerHTML = '<li class="dimmed">Warte auf weitere Spieler...</li>'; }
         }
 
         function updateAllPlayersList(allPlayers, currentPlayerIdStr) {
             const el = $('#all-players-list'); setHtml('all-players-list', '');
-            if (allPlayers && Object.keys(allPlayers).length > 0) {
+            if (el && allPlayers && Object.keys(allPlayers).length > 0) { // Check if el exists
                 for (const pid in allPlayers) {
                     const p = allPlayers[pid]; const li = document.createElement('li');
                     let statusDisplay;
@@ -738,7 +753,7 @@
                     if (pid === currentPlayerIdStr) li.classList.add('highlight');
                     el.appendChild(li);
                 }
-            } else { el.innerHTML = '<li class="dimmed">Keine Spielerinformationen.</li>'; }
+            } else if (el) { el.innerHTML = '<li class="dimmed">Keine Spielerinformationen.</li>'; }
         }
 
         function updateHiderTask(task, taskSkipsAvailable) {
@@ -766,7 +781,7 @@
                     toggleDisplay(skipTaskButton.id, true);
                     // Skip Task Button ist nur aktiv, wenn online ODER wenn offline (um caching zu ermöglichen)
                     // und Skips verfügbar sind und eine Aufgabe da ist.
-                    skipTaskButton.disabled = !(socketConnected || !socketConnected) || numSkips <= 0 || !task.description;
+                    skipTaskButton.disabled = !isActiveHider || numSkips <= 0 || !task.description;
                     setText(skipsLeftInButtonSpan.id, numSkips);
                     skipTaskButton.title = numSkips > 0 ? "Diese Aufgabe überspringen" : "Keine Skips mehr verfügbar";
                 }
@@ -775,7 +790,7 @@
                 if (completeTaskButton) completeTaskButton.disabled = true; // Button deaktivieren, wenn keine Aufgabe da
 
                 // Zeige "Warte auf Aufgabe" nur, wenn Hider und aktiv, aber keine Aufgabe UND keine Precached Tasks sichtbar
-                const precachedVisible = $('#hider-precached-tasks-container').style.display !== 'none';
+                const precachedVisible = $('#hider-precached-tasks-container')?.style.display !== 'none';
                 toggleDisplay('hider-no-task-message', isActiveHider && !precachedVisible);
 
                 if (skipTaskButton) toggleDisplay(skipTaskButton.id, false); // Überspringen-Button verstecken, wenn keine Aufgabe
@@ -791,7 +806,9 @@
         function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId = 'hider-leaderboard') {
             const table = $(`#${tableId}`); const tbody = table ? table.querySelector('tbody') : null;
             const containerId = (tableId === 'hider-leaderboard') ? 'hider-leaderboard-container' : 'game-over-leaderboard-container';
-            if (!tbody) { toggleDisplay(containerId, false); return; }
+            const container = $(`#${containerId}`);
+
+            if (!tbody || !container) { toggleDisplay(containerId, false); return; }
             tbody.innerHTML = '';
             const isHiderRole = currentPlayerData && currentPlayerData.role === 'hider';
             const isGameOver = currentPlayerData && currentPlayerData.game_state && (currentPlayerData.game_state.status === GAME_STATE_HIDER_WINS || currentPlayerData.game_state.status === GAME_STATE_SEEKER_WINS);
@@ -816,6 +833,7 @@
 
         function updateSeekerHiderList(hiderLocations, isSocketConnected) { // isSocketConnected als Parameter hinzugefügt
             const ul = $('#seeker-hider-list'); const noHidersMsg = $('#seeker-no-hiders-message');
+            if (!ul || !noHidersMsg) return; // Robustness check
             ul.innerHTML = '';
             const isActiveSeeker = currentPlayerData && currentPlayerData.role === 'seeker' && currentPlayerData.player_status === 'active';
 
@@ -873,8 +891,12 @@
             // Nur aktualisieren, wenn der Server noch keine Position gesendet hat oder es ein Browser-Update ist
             if (locationTextEl && !locationTextEl.textContent.includes('(Server)')) setText('player-location', `Lat: ${lat.toFixed(5)}, Lon: ${lon.toFixed(5)} (Browser)`);
             setText('player-accuracy', accuracy.toFixed(1));
-            $('#mapLink a').href = `https://www.google.com/maps?q=${lat},${lon}`;
-            toggleDisplay('mapLink', true, 'inline');
+            const mapLinkAnchor = $('#mapLink a');
+            if (mapLinkAnchor) {
+                mapLinkAnchor.href = `https://www.google.com/maps?q=${lat},${lon}`;
+                toggleDisplay('mapLink', true, 'inline');
+            }
+            
             const locErrorMsg = $('#location-error-message');
             if (locErrorMsg && locErrorMsg.style.display !== 'none') {
                 toggleDisplay('location-error-message', false); // Standortfehler ausblenden
@@ -954,7 +976,7 @@
                 let joinError = $('#join-error-message');
                 setText(joinError.id, 'Nickname, Server-Host und Port sind erforderlich.');
                 toggleDisplay(joinError.id, true); show('messages-section');
-                event.submitter.disabled = false; // Button wieder aktivieren, da Client-seitiger Fehler
+                if (event.submitter) event.submitter.disabled = false; // Button wieder aktivieren, da Client-seitiger Fehler
                 return;
             }
             saveServerDetails(serverHost, serverPort); // Serverdetails lokal speichern
@@ -997,7 +1019,7 @@
                 await sendClientAction('/force_server_reset_from_ui', null, event.target);
             } else {
                 // Wenn Abbruch, Button wieder aktivieren (könnte durch sendClientAction deaktiviert worden sein)
-                event.target.disabled = !(currentPlayerData && currentPlayerData.is_socket_connected_to_server === true);
+                if (event.target) event.target.disabled = !(currentPlayerData && currentPlayerData.is_socket_connected_to_server === true);
             }
         });
 
