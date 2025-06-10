@@ -22,7 +22,7 @@ client_view_data = {
     "location": None,
     "confirmed_for_lobby": False,
     "player_is_ready": False,
-    "player_status": "active", # active, caught, failed_task, failed_loc_update
+    "player_status": "active", # active, caught, failed_task, failed_loc_update, offline (NEU)
     "is_socket_connected_to_server": False, # Status der direkten Socket-Verbindung zum Spielserver
     "game_state": {
         "status": "disconnected",
@@ -46,7 +46,10 @@ client_view_data = {
     "player_has_requested_early_end": False,
     "current_server_host": SERVER_HOST, # Aktuell konfigurierter Server-Host
     "current_server_port": SERVER_PORT, # Aktuell konfigurierter Server-Port
-    "task_skips_available": 0 # Für Hider
+    "task_skips_available": 0, # Für Hider
+    "offline_action_queue": [],  # NEU: Liste für {action_for_server: {...}, ui_message_on_cache: "..."}
+    "is_processing_offline_queue": False, # NEU: Flag für UI-Feedback
+    "pre_cached_tasks": [], # NEU: Für Aufgaben-Pre-Caching
 }
 client_data_lock = threading.Lock() # Lock für den sicheren Zugriff auf client_view_data
 server_socket_global = None # Der globale Socket zum Spielserver
@@ -107,6 +110,51 @@ def send_message_to_server(data):
                  client_view_data["error_message"] = f"Nicht mit Server verbunden. Aktion '{action_sent}' nicht gesendet."
     return False
 
+def process_offline_queue():
+    """
+    Verarbeitet die gesammelten Offline-Aktionen und sendet sie an den Server.
+    Wird in einem separaten Thread ausgeführt.
+    """
+    with client_data_lock:
+        if not client_view_data.get("offline_action_queue") or client_view_data.get("is_processing_offline_queue"):
+            return
+        client_view_data["is_processing_offline_queue"] = True
+        queue_to_process = list(client_view_data["offline_action_queue"])
+        client_view_data["offline_action_queue"].clear() # Leeren, um neue Offline-Aktionen zu sammeln
+
+    print(f"CLIENT: Starte Verarbeitung von {len(queue_to_process)} Offline-Aktionen.")
+    successfully_sent_actions_count = 0
+    failed_actions_to_re_queue = []
+
+    for offline_action_package in queue_to_process:
+        action_to_send_to_server = offline_action_package.get("action_for_server")
+        if action_to_send_to_server:
+            # Versuche zu senden. send_message_to_server aktualisiert is_socket_connected_to_server bei Fehler.
+            if send_message_to_server(action_to_send_to_server):
+                print(f"CLIENT: Offline-Aktion '{action_to_send_to_server.get('action')}' erfolgreich an Server gesendet.")
+                successfully_sent_actions_count += 1
+            else:
+                print(f"CLIENT: Senden der Offline-Aktion '{action_to_send_to_server.get('action')}' fehlgeschlagen. Wieder in Queue.")
+                failed_actions_to_re_queue.append(offline_action_package)
+                # Falls die Verbindung erneut abbricht, breche ab, um nicht sinnlos zu versuchen
+                with client_data_lock:
+                    if not client_view_data["is_socket_connected_to_server"]:
+                        print("CLIENT: Verbindung während Offline-Queue-Verarbeitung verloren. Breche ab.")
+                        break # Beende Schleife, Rest wird re-queued.
+        else:
+            print(f"CLIENT ERROR: Ungültiges Offline-Aktions-Paket: {offline_action_package}")
+
+    with client_data_lock:
+        client_view_data["offline_action_queue"] = failed_actions_to_re_queue + client_view_data["offline_action_queue"]
+        client_view_data["is_processing_offline_queue"] = False
+        if not client_view_data["offline_action_queue"] and successfully_sent_actions_count > 0 :
+             client_view_data["game_message"] = "Alle Offline-Aktionen erfolgreich synchronisiert."
+        elif failed_actions_to_re_queue:
+             client_view_data["error_message"] = f"{len(failed_actions_to_re_queue)} Offline-Aktion(en) konnte(n) nicht synchronisiert werden. Erneuter Versuch bei nächster Gelegenheit."
+        else: # Keine Aktionen in Queue, aber auch keine gesendet.
+            client_view_data["game_message"] = None # Lösche ggf. alte Nachrichten
+
+
 def network_communication_thread():
     """
     Dieser Thread verwaltet die persistente Socket-Verbindung zum Spielserver.
@@ -120,15 +168,18 @@ def network_communication_thread():
         socket_should_be_connected = False
         with client_data_lock:
             socket_should_be_connected = client_view_data["is_socket_connected_to_server"]
+            # Beziehe den aktuellen Host und Port aus client_view_data, um Änderungen widerzuspiegeln
+            current_host_to_connect = client_view_data["current_server_host"]
+            current_port_to_connect = client_view_data["current_server_port"]
+
 
         # --- Verbindungsaufbau-Logik ---
         if not socket_should_be_connected:
             try:
-                current_host_to_connect, current_port_to_connect = SERVER_HOST, SERVER_PORT
                 with client_data_lock: # UI-Status aktualisieren
                     client_view_data["is_socket_connected_to_server"] = False # Stellen sicher, dass er auf False steht
                     if not client_view_data.get("error_message") and not client_view_data.get("join_error"):
-                         client_view_data["game_state"]["status_display"] = f"Verbinde mit Spielserver {SERVER_HOST}:{SERVER_PORT}..."
+                         client_view_data["game_state"]["status_display"] = f"Verbinde mit Spielserver {current_host_to_connect}:{current_port_to_connect}..."
 
                 temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 temp_sock.settimeout(5) # Kurzer Timeout für den Verbindungsversuch
@@ -225,6 +276,10 @@ def network_communication_thread():
                             client_view_data["role"] = None
                             client_view_data["confirmed_for_lobby"] = False
                             client_view_data["player_is_ready"] = False
+                            # NEU: Auch die Offline-Queue leeren, da diese Aktionen nun ungültig sind
+                            client_view_data["offline_action_queue"].clear()
+                            client_view_data["is_processing_offline_queue"] = False
+
                             # join_error und error_message von Server übernehmen
                             if message.get("join_error"):
                                 client_view_data["join_error"] = message["join_error"]
@@ -246,10 +301,18 @@ def network_communication_thread():
                             "hider_locations",
                             "hider_location_update_imminent",
                             "early_end_requests_count", "total_active_players_for_early_end",
-                            "player_has_requested_early_end", "task_skips_available"
+                            "player_has_requested_early_end", "task_skips_available",
+                            "pre_cached_tasks" # NEU: Pre-cached tasks vom Server erhalten
                         ]
                         for key in update_keys:
                             if key in message: client_view_data[key] = message[key]
+
+                        # NEU: Starte Verarbeitung der Offline-Queue, wenn Spieler-ID vorhanden und Queue nicht leer
+                        if client_view_data.get("player_id") and \
+                           client_view_data.get("offline_action_queue") and \
+                           not client_view_data.get("is_processing_offline_queue"):
+                            threading.Thread(target=process_offline_queue, daemon=True).start()
+
 
                     elif msg_type == "server_text_notification":
                         game_msg_text = message.get("message", "Server Nachricht")
@@ -284,6 +347,7 @@ def network_communication_thread():
                                 client_view_data["role"] = None
                                 client_view_data["confirmed_for_lobby"] = False
                                 client_view_data["player_is_ready"] = False
+                                client_view_data["offline_action_queue"].clear() # NEU: Queue auch leeren
 
                     elif msg_type == "acknowledgement":
                         ack_message = message.get("message", "Aktion bestätigt.")
@@ -384,7 +448,10 @@ def join_game_route():
             "current_task": None, "hider_leaderboard": [], "hider_locations": {},
             "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0
+            "player_has_requested_early_end": False, "task_skips_available": 0,
+            "offline_action_queue": [], # NEU: Leere die Queue bei einem neuen Join-Versuch
+            "is_processing_offline_queue": False, # NEU: Reset
+            "pre_cached_tasks": [], # NEU: Reset
         })
         # game_state sollte mindestens einen Basiswert haben
         if "game_state" not in client_view_data or client_view_data["game_state"] is None:
@@ -483,7 +550,7 @@ def handle_generic_action(action_name, payload_key=None, payload_value_from_requ
 
         if payload_key == "ready_status":
              if not isinstance(val_from_req, bool): return jsonify({"success": False, "message": "Ungültiger Wert für ready_status (muss boolean sein)."}), 400
-        elif val_from_req is None and payload_key != "force_server_reset": # force_server_reset hat keinen Wert
+        elif val_from_req is None and payload_key != "force_server_reset_from_ui": # force_server_reset hat keinen Wert
             return jsonify({"success": False, "message": f"Fehlender Wert für '{payload_key}' in Request-Daten."}), 400
 
         if val_from_req is not None or payload_key == "force_server_reset_from_ui": # Payload hinzufügen, wenn Wert da ist oder es ein Reset ist
@@ -506,8 +573,68 @@ def handle_generic_action(action_name, payload_key=None, payload_value_from_requ
 def confirm_lobby_join_route(): return handle_generic_action("CONFIRM_LOBBY_JOIN")
 @app.route('/set_ready', methods=['POST'])
 def set_ready_route(): return handle_generic_action("SET_READY", "ready_status", "ready_status")
+
+# NEU: Angepasste complete_task_route für Offline-Fähigkeit
 @app.route('/complete_task', methods=['POST'])
-def complete_task_route(): return handle_generic_action("TASK_COMPLETE")
+def complete_task_route():
+    player_id_local, current_task_local, socket_ok_local, is_hider_active = None, None, False, False
+    with client_data_lock:
+        player_id_local = client_view_data.get("player_id")
+        current_task_local = client_view_data.get("current_task") # Die *aktuell angezeigte* Aufgabe
+        socket_ok_local = client_view_data.get("is_socket_connected_to_server", False)
+        is_hider_active = (client_view_data.get("role") == "hider" and
+                           client_view_data.get("player_status") == "active")
+
+    if not player_id_local or not is_hider_active:
+        with client_data_lock: temp_cvd = client_view_data.copy()
+        temp_cvd["session_nickname"] = session.get("nickname")
+        temp_cvd["session_role_choice"] = session.get("role_choice")
+        return jsonify({"success": False, "message": "Aktion nicht möglich (kein aktiver Hider oder keine Spieler-ID).", **temp_cvd}), 403
+
+    if not current_task_local or not current_task_local.get("id"):
+        with client_data_lock: temp_cvd = client_view_data.copy()
+        temp_cvd["session_nickname"] = session.get("nickname")
+        temp_cvd["session_role_choice"] = session.get("role_choice")
+        return jsonify({"success": False, "message": "Keine aktive Aufgabe zum Erledigen vorhanden.", **temp_cvd}), 400
+
+    task_id_to_complete = current_task_local["id"]
+    task_description_for_ui_msg = current_task_local.get("description", "Unbekannte Aufgabe")
+
+    if socket_ok_local: # Online-Fall: Direkt an Server senden
+        action_payload_for_server = {"action": "TASK_COMPLETE", "task_id": task_id_to_complete}
+        success_sent = send_message_to_server(action_payload_for_server)
+        with client_data_lock:
+            if success_sent: client_view_data["error_message"] = None
+            response_data = client_view_data.copy()
+            response_data["action_send_success"] = success_sent
+            response_data["session_nickname"] = session.get("nickname")
+            response_data["session_role_choice"] = session.get("role_choice")
+        return jsonify(response_data)
+    else: # Offline-Fall: In Queue speichern
+        offline_action_for_server = {
+            "action": "TASK_COMPLETE_OFFLINE", # Eigene Aktion für Offline-Verarbeitung
+            "task_id": task_id_to_complete,
+            "completed_at_timestamp_offline": time.time() # Aktueller Zeitstempel der Offline-Erledigung
+        }
+        offline_package = {
+            "action_for_server": offline_action_for_server,
+            "ui_message_on_cache": f"Aufgabe '{task_description_for_ui_msg}' offline als erledigt markiert. Wird bei Verbindung gesendet."
+        }
+        with client_data_lock:
+            client_view_data["offline_action_queue"].append(offline_package)
+            client_view_data["game_message"] = offline_package["ui_message_on_cache"]
+            # Wichtig: Die erledigte Aufgabe aus der lokalen Ansicht entfernen, um Doppelklick zu vermeiden.
+            # Der Server wird sie bei erfolgreicher Synchronisation ebenfalls entfernen.
+            client_view_data["current_task"] = None
+            # UI soll bei nächstem Poll die precached tasks anzeigen, wenn keine current_task da ist.
+            response_data = client_view_data.copy()
+            response_data["action_send_success"] = True # Lokales Speichern wird als "erfolgreich" betrachtet
+            response_data["session_nickname"] = session.get("nickname")
+            response_data["session_role_choice"] = session.get("role_choice")
+        print(f"CLIENT: Aufgabe '{task_description_for_ui_msg}' (ID: {task_id_to_complete}) offline erledigt, zur Queue hinzugefügt.")
+        return jsonify(response_data)
+
+
 @app.route('/catch_hider', methods=['POST'])
 def catch_hider_route(): return handle_generic_action("CATCH_HIDER", "hider_id_to_catch", "hider_id_to_catch")
 @app.route('/request_early_round_end_action', methods=['POST'])
@@ -538,7 +665,10 @@ def leave_game_and_go_to_join_screen_route():
             "game_message": None, "error_message": None, "join_error": None, # Alte Nachrichten/Fehler löschen
             "hider_location_update_imminent": False,
             "early_end_requests_count": 0, "total_active_players_for_early_end": 0,
-            "player_has_requested_early_end": False, "task_skips_available": 0
+            "player_has_requested_early_end": False, "task_skips_available": 0,
+            "offline_action_queue": [], # NEU: Leere die Offline-Aktions-Queue
+            "is_processing_offline_queue": False, # NEU: Reset
+            "pre_cached_tasks": [], # NEU: Reset
         })
         # Setze game_state in einen neutralen Zustand
         if "game_state" in client_view_data and client_view_data["game_state"] is not None:
