@@ -465,7 +465,6 @@
             resetDynamicUIElements();
             currentPlayerData = JSON.parse(JSON.stringify(data));
             
-            // NEU: Ein Set, das alle Sektionen sammelt, die am Ende sichtbar sein sollen.
             const sectionsToMakeVisible = new Set();
 
             let messagesWereShown = false;
@@ -480,46 +479,37 @@
             if (data.error_message) { setText('error-message', data.error_message); toggleDisplay('error-message', true); messagesWereShown = true; setTimeout(() => { toggleDisplay('error-message', false); if(currentPlayerData) currentPlayerData.error_message = null; }, 8000); }
             const locationErrorEl = $('#location-error-message');
             if (locationErrorEl && locationErrorEl.style.display !== 'none' && locationErrorEl.textContent) messagesWereShown = true;
-            if(messagesWereShown) sectionsToMakeVisible.add('messages-section'); // 'show' wird durch Hinzufügen zum Set ersetzt
-
+            if(messagesWereShown) sectionsToMakeVisible.add('messages-section');
+            
+            // *** NEUE LOGIK START ***
+            const userHasInitiatedConnection = data.user_has_initiated_connection === true;
             const isSocketConnected = data.is_socket_connected_to_server === true;
             const hasPlayerId = !!data.player_id;
             const serverGameStatus = data.game_state?.status;
             const serverGameStatusDisplay = data.game_state?.status_display || "Lade...";
 
-            // --- Update des Socket-Verbindungsstatus ---
-            const playerSocketStatusEl = $('#player-socket-connection-status');
-            if (playerSocketStatusEl) {
-                if (isSocketConnected) {
-                    setText(playerSocketStatusEl.id, 'Verbunden zum Spielserver');
-                    playerSocketStatusEl.className = 'status-connected';
-                } else {
-                    setText(playerSocketStatusEl.id, 'GETRENNT - Versuche Wiederverbindung...');
-                    playerSocketStatusEl.className = 'status-disconnected';
-                }
-            }
-            
-            // --- Standort-Anzeige ---
-            if(hasPlayerId){
-                const locationDisplay = $('#player-location');
-                if (data.location && data.location.length >= 2) {
-                    locationDisplay.textContent = `Lat: ${parseFloat(data.location[0]).toFixed(5)}, Lon: ${parseFloat(data.location[1]).toFixed(5)} (Server)`;
-                    $('#mapLink a').href = `https://www.google.com/maps?q=${data.location[0]},${data.location[1]}`;
-                    toggleDisplay('mapLink', true, 'inline');
-                    setText('player-accuracy', data.location.length > 2 && data.location[2] !== null ? parseFloat(data.location[2]).toFixed(1) : 'N/A');
-                } else if (locationWatchId !== null) {
-                    locationDisplay.textContent = 'Standort wird vom Browser ermittelt...'; toggleDisplay('mapLink', false); setText('player-accuracy', 'N/A');
-                } else {
-                    locationDisplay.textContent = 'Standort unbekannt.'; toggleDisplay('mapLink', false); setText('player-accuracy', 'N/A');
-                }
-            }
-            
-            // --- Haupt-Sektions-Logik basierend auf Verbindungs- und Spielerstatus ---
-            if (!isSocketConnected) {
+            if (!userHasInitiatedConnection) {
+                // Fall 1: Benutzer hat noch nie auf "Verbinden" geklickt. Zeige IMMER den Verbindungsbildschirm.
                 sectionsToMakeVisible.add('connect-section');
                 setText('connect-socket-status-display', serverGameStatusDisplay);
-                $('#connect-socket-status-display').className = 'status-disconnected';
-            } else if (isSocketConnected && !hasPlayerId) {
+                $('#connect-socket-status-display').className = 'dimmed';
+            
+            } else if (userHasInitiatedConnection && !isSocketConnected) {
+                // Fall 2: Benutzer will verbinden, aber es klappt (noch) nicht. Zeige Verbindungsbildschirm mit Status.
+                sectionsToMakeVisible.add('connect-section');
+                setText('connect-socket-status-display', serverGameStatusDisplay);
+                // Annahme: client.py setzt status_display auf "Verbinde mit..." oder eine Fehlermeldung
+                $('#connect-socket-status-display').className = 'status-connecting'; // Standardmäßig orange
+                
+                const connectError = data.error_message || data.join_error;
+                if(connectError) {
+                    setText('connect-error-message', connectError);
+                    toggleDisplay('connect-error-message', true);
+                    $('#connect-socket-status-display').className = 'status-disconnected'; // Rot bei explizitem Fehler
+                }
+            
+            } else if (userHasInitiatedConnection && isSocketConnected && !hasPlayerId) {
+                // Fall 3: Erfolgreich verbunden, aber noch kein Spieler. Zeige Lobby-Registrierung.
                 sectionsToMakeVisible.add('lobby-section');
                 toggleDisplay('lobby-registration-container', true);
                 
@@ -537,10 +527,23 @@
                     toggleDisplay('error-message', true);
                     sectionsToMakeVisible.add('messages-section');
                 }
-            } else if (isSocketConnected && hasPlayerId) {
+
+            } else if (userHasInitiatedConnection && isSocketConnected && hasPlayerId) {
+                // Fall 4: Vollständig im Spiel. Hier kommt die gesamte Spiellogik rein.
                 sectionsToMakeVisible.add('player-section');
-                setText('player-name', data.player_name); setText('player-id', data.player_id); setText('player-role', data.role);
                 
+                // Update des Socket-Verbindungsstatus im Player-Header
+                const playerSocketStatusEl = $('#player-socket-connection-status');
+                if (isSocketConnected) {
+                    setText(playerSocketStatusEl.id, 'Verbunden zum Spielserver');
+                    playerSocketStatusEl.className = 'status-connected';
+                } else {
+                    setText(playerSocketStatusEl.id, 'GETRENNT - Versuche Wiederverbindung...');
+                    playerSocketStatusEl.className = 'status-disconnected';
+                }
+                
+                // Update der Spielerdaten
+                setText('player-name', data.player_name); setText('player-id', data.player_id); setText('player-role', data.role);
                 let playerStatusText = data.player_status;
                 if (data.player_status === 'active') playerStatusText = 'Aktiv im Spiel';
                 else if (data.player_status === 'caught') playerStatusText = 'Gefangen (jetzt Seeker)';
@@ -548,6 +551,20 @@
                 setText('player-status-ingame', playerStatusText);
                 setText('game-status-display', serverGameStatusDisplay);
 
+                // Standort-Anzeige
+                const locationDisplay = $('#player-location');
+                if (data.location && data.location.length >= 2) {
+                    locationDisplay.textContent = `Lat: ${parseFloat(data.location[0]).toFixed(5)}, Lon: ${parseFloat(data.location[1]).toFixed(5)} (Server)`;
+                    $('#mapLink a').href = `https://www.google.com/maps?q=${data.location[0]},${data.location[1]}`;
+                    toggleDisplay('mapLink', true, 'inline');
+                    setText('player-accuracy', data.location.length > 2 && data.location[2] !== null ? parseFloat(data.location[2]).toFixed(1) : 'N/A');
+                } else if (locationWatchId !== null) {
+                    locationDisplay.textContent = 'Standort wird vom Browser ermittelt...'; toggleDisplay('mapLink', false); setText('player-accuracy', 'N/A');
+                } else {
+                    locationDisplay.textContent = 'Standort unbekannt.'; toggleDisplay('mapLink', false); setText('player-accuracy', 'N/A');
+                }
+                
+                // UI-Elemente basierend auf Spielstatus und Rolle anzeigen
                 toggleDisplay('hider-warning-text', data.role === 'hider' && data.hider_location_update_imminent === true && data.player_status === 'active');
                 
                 const canVote = (serverGameStatus === GAME_STATE_RUNNING || serverGameStatus === GAME_STATE_HIDER_WAIT) && data.player_status === 'active';
@@ -561,6 +578,7 @@
                 toggleDisplay('server-management-container', isSocketConnected);
                 $('#force-server-reset-button').disabled = !isSocketConnected;
 
+                // Sektions-Logik basierend auf dem Spielstatus
                 if (serverGameStatus === GAME_STATE_LOBBY) {
                     sectionsToMakeVisible.add('lobby-section');
                     toggleDisplay('lobby-main-view-container', true);
@@ -588,6 +606,7 @@
                     updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
                 }
 
+                // Rollen-spezifische UI-Updates
                 if(data.role === 'hider') {
                     setText('hider-skips-available-display', data.task_skips_available || 0);
                     updateHiderTask(data.current_task, data.task_skips_available);
@@ -609,6 +628,7 @@
                      updateSeekerHiderList(data.hider_locations, isSocketConnected);
                 }
             }
+            // *** NEUE LOGIK ENDE ***
 
             // Standort-Updates starten/stoppen
             if (hasPlayerId && (serverGameStatus === GAME_STATE_LOBBY || serverGameStatus === GAME_STATE_HIDER_WAIT || serverGameStatus === GAME_STATE_RUNNING)) {
@@ -617,7 +637,7 @@
                 stopLocationUpdates();
             }
             
-            // NEU: Zentrale Steuerung der Sichtbarkeit am Ende der Funktion
+            // Zentrale Steuerung der Sichtbarkeit am Ende der Funktion
             document.querySelectorAll('#app-container > .container.section').forEach(section => {
                 if (sectionsToMakeVisible.has(section.id)) {
                     section.classList.add('visible');
