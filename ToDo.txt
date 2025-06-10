@@ -6,3 +6,5 @@ HIDE AND SEEK TO DO
 - auch wärend dem spiel joinen.
 - UI aufräumen
 - Rolle immer vor spiel Wählen können
+- Leaderboard am ende (Wenn seaker gewinnen, alle seaker auf platz 1 und Hider nach punktzahl, wenn seaker verlieren alle seaker letzter Platz, hider geranked)
+- Nach ende der Runde direkt in Lobby ohne Neuanmeldung
