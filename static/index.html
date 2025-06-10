@@ -513,6 +513,10 @@
                 // Fall 3: Erfolgreich verbunden, aber noch kein Spieler. Zeige Lobby-Registrierung.
                 sectionsToMakeVisible.add('lobby-section');
                 toggleDisplay('lobby-registration-container', true);
+
+                // NEU: Explizite Aktivierung des "Lobby beitreten"-Buttons. Das ist der Fix.
+                const joinButton = $('#register-in-lobby-button');
+                if (joinButton) joinButton.disabled = false;
                 
                 const nicknameInput = $('#lobby-nickname');
                 if (nicknameInput && document.activeElement !== nicknameInput) {
