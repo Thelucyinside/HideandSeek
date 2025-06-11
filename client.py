@@ -215,6 +215,13 @@ def network_communication_thread():
                     client_view_data["is_socket_connected_to_server"] = True
                     client_view_data["error_message"] = None # Erfolgreiche Verbindung löscht allgemeine Fehler
 
+                    # ===== KORRIGIERTE LOGIK HIER =====
+                    # Starte die Offline-Queue-Verarbeitung SOFORT nach dem Verbindungsaufbau,
+                    # unabhängig von Rejoin oder Player-ID. Dies ist entscheidend für den Reset-Befehl.
+                    if client_view_data.get("offline_action_queue") and not client_view_data.get("is_processing_offline_queue"):
+                        print("CLIENT: Verbindung hergestellt, starte Verarbeitung der Offline-Queue...")
+                        threading.Thread(target=process_offline_queue, daemon=True).start()
+
                     # --- REJOIN LOGIC (Versuch, eine bestehende Sitzung wiederherzustellen) ---
                     # Wenn wir eine player_id und einen Namen haben, versuchen wir zu rejoind.
                     if client_view_data.get("player_id") and client_view_data.get("player_name"):
@@ -665,7 +672,7 @@ def force_server_reset_route():
     """
     Nimmt eine Server-Adresse und einen Reset-Befehl entgegen.
     Diese Route aktualisiert zuerst die Server-Konfiguration des Clients
-    (wie /connect_to_server) und sendet dann sofort einen Reset-Befehl.
+    (wie /connect_to_server) und legt den Reset-Befehl in die Warteschlange.
     Dies ist notwendig, damit der Reset-Button funktioniert, auch wenn zuvor
     keine Verbindung bestand.
     """
@@ -679,7 +686,7 @@ def force_server_reset_route():
     if not server_address:
         return jsonify({"success": False, "message": "Server-Adresse darf nicht leer sein."}), 400
 
-    # Schritt 1: Server-Adresse parsen (Logik aus /connect_to_server übernommen)
+    # Schritt 1: Server-Adresse parsen
     try:
         if ':' in server_address:
             host, port_str = server_address.rsplit(':', 1)
@@ -691,7 +698,6 @@ def force_server_reset_route():
         return jsonify({"success": False, "message": "Ungültiger Port in der Adresse."}), 400
 
     # Schritt 2: Client-Zustand aktualisieren und Netzwerk-Thread zur Verbindung anweisen
-    # (Logik ebenfalls aus /connect_to_server übernommen)
     server_details_changed = False
     with client_data_lock:
         if SERVER_HOST != host or SERVER_PORT != port:
@@ -700,10 +706,9 @@ def force_server_reset_route():
             client_view_data["current_server_port"] = port
             server_details_changed = True
         
-        # Wichtig: Signal an den Netzwerk-Thread, zu dieser Adresse zu verbinden
         client_view_data["user_has_initiated_connection"] = True
-        client_view_data["is_socket_connected_to_server"] = False # Erzwingt Neuverbindung
-        client_view_data["game_message"] = f"Sende Reset-Befehl an {server_address}..."
+        client_view_data["is_socket_connected_to_server"] = False
+        client_view_data["game_message"] = f"Reset-Befehl für {server_address} in Warteschlange. Verbinde..."
 
     if server_details_changed and server_socket_global:
         try:
@@ -712,12 +717,16 @@ def force_server_reset_route():
         except OSError: pass
         server_socket_global = None
 
-    # Schritt 3: Den Reset-Befehl senden.
-    # send_message_to_server wird fehlschlagen, wenn der Socket noch nicht verbunden ist.
-    # Das ist OKAY. Der network_communication_thread wird die Verbindung im Hintergrund
-    # aufbauen und der Benutzer kann es bei Bedarf erneut versuchen. Wichtig ist,
-    # dass der Befehl überhaupt versucht wird.
-    send_message_to_server({"action": "FORCE_SERVER_RESET_FROM_CLIENT"})
+    # Schritt 3: Den Reset-Befehl in die Offline-Warteschlange legen
+    with client_data_lock:
+        reset_action = {
+            "action_for_server": {"action": "FORCE_SERVER_RESET_FROM_CLIENT"},
+            "ui_message_on_cache": f"Reset-Befehl für {server_address} in Warteschlange..."
+        }
+        # Lösche zuerst die alte Queue, um sicherzustellen, dass nur der Reset ausgeführt wird
+        client_view_data["offline_action_queue"].clear() 
+        client_view_data["offline_action_queue"].append(reset_action)
+        print("CLIENT: FORCE_SERVER_RESET-Aktion zur Offline-Queue hinzugefügt.")
 
     # Schritt 4: Den aktuellen (sich jetzt verbindenden) Zustand zurückgeben
     with client_data_lock:
