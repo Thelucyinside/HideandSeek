@@ -659,9 +659,72 @@ def catch_hider_route(): return handle_generic_action("CATCH_HIDER", "hider_id_t
 def request_early_round_end_action_route(): return handle_generic_action("REQUEST_EARLY_ROUND_END")
 @app.route('/skip_task', methods=['POST'])
 def skip_task_route(): return handle_generic_action("SKIP_TASK")
+
 @app.route('/force_server_reset_from_ui', methods=['POST'])
-# requires_player_id=False, da dies von jedem Client (auch unregistrierten) gesendet werden kann
-def force_server_reset_route(): return handle_generic_action("FORCE_SERVER_RESET_FROM_CLIENT", requires_player_id=False)
+def force_server_reset_route():
+    """
+    Nimmt eine Server-Adresse und einen Reset-Befehl entgegen.
+    Diese Route aktualisiert zuerst die Server-Konfiguration des Clients
+    (wie /connect_to_server) und sendet dann sofort einen Reset-Befehl.
+    Dies ist notwendig, damit der Reset-Button funktioniert, auch wenn zuvor
+    keine Verbindung bestand.
+    """
+    global SERVER_HOST, SERVER_PORT, server_socket_global
+    data = request.get_json()
+
+    # Schritt 0: Validierung der Eingabe
+    if not data or 'server_address' not in data:
+        return jsonify({"success": False, "message": "Server-Adresse für Reset fehlt."}), 400
+    server_address = data['server_address'].strip()
+    if not server_address:
+        return jsonify({"success": False, "message": "Server-Adresse darf nicht leer sein."}), 400
+
+    # Schritt 1: Server-Adresse parsen (Logik aus /connect_to_server übernommen)
+    try:
+        if ':' in server_address:
+            host, port_str = server_address.rsplit(':', 1)
+            port = int(port_str)
+        else:
+            host = server_address
+            port = 65432 # Standard-Port
+    except ValueError:
+        return jsonify({"success": False, "message": "Ungültiger Port in der Adresse."}), 400
+
+    # Schritt 2: Client-Zustand aktualisieren und Netzwerk-Thread zur Verbindung anweisen
+    # (Logik ebenfalls aus /connect_to_server übernommen)
+    server_details_changed = False
+    with client_data_lock:
+        if SERVER_HOST != host or SERVER_PORT != port:
+            SERVER_HOST, SERVER_PORT = host, port
+            client_view_data["current_server_host"] = host
+            client_view_data["current_server_port"] = port
+            server_details_changed = True
+        
+        # Wichtig: Signal an den Netzwerk-Thread, zu dieser Adresse zu verbinden
+        client_view_data["user_has_initiated_connection"] = True
+        client_view_data["is_socket_connected_to_server"] = False # Erzwingt Neuverbindung
+        client_view_data["game_message"] = f"Sende Reset-Befehl an {server_address}..."
+
+    if server_details_changed and server_socket_global:
+        try:
+            server_socket_global.shutdown(socket.SHUT_RDWR)
+            server_socket_global.close()
+        except OSError: pass
+        server_socket_global = None
+
+    # Schritt 3: Den Reset-Befehl senden.
+    # send_message_to_server wird fehlschlagen, wenn der Socket noch nicht verbunden ist.
+    # Das ist OKAY. Der network_communication_thread wird die Verbindung im Hintergrund
+    # aufbauen und der Benutzer kann es bei Bedarf erneut versuchen. Wichtig ist,
+    # dass der Befehl überhaupt versucht wird.
+    send_message_to_server({"action": "FORCE_SERVER_RESET_FROM_CLIENT"})
+
+    # Schritt 4: Den aktuellen (sich jetzt verbindenden) Zustand zurückgeben
+    with client_data_lock:
+        response_data = client_view_data.copy()
+        response_data["session_nickname"] = session.get("nickname")
+        response_data["session_role_choice"] = session.get("role_choice")
+    return jsonify(response_data)
 
 @app.route('/return_to_registration', methods=['POST'])
 def return_to_registration_route():
