@@ -71,22 +71,29 @@ def format_time_ago(seconds_elapsed):
 def _safe_send_json(conn, payload, player_id_for_log="N/A", player_name_for_log="N/A_IN_SAFE_SEND"):
     """Sicherer Versand von JSON-Daten an einen Client. Setzt client_conn auf None bei Fehler."""
     if not conn:
+        print(f"SERVER SAFE_SEND (NO CONN): P:{player_id_for_log} ({player_name_for_log}): Keine Verbindung zum Senden vorhanden.")
         return False
     try:
         conn.sendall(json.dumps(payload).encode('utf-8') + b'\n')
         return True
     except (ConnectionResetError, BrokenPipeError, OSError) as e:
         # print(f"SERVER SAFE_SEND (COMM ERROR): P:{player_id_for_log} ({player_name_for_log}): {e}") # Zu viele Logs
-        with data_lock: # Muss gelockt sein, um game_data zu ändern
+        with data_lock: 
             if "players" in game_data and player_id_for_log in game_data["players"]:
-                # Wichtig: Nur None setzen, wenn es sich tatsächlich um die Verbindung handelt, die den Fehler verursacht hat
-                # Das verhindert, dass ein alter Handler die Verbindung des neu verbundenen Spielers (Rejoin) überschreibt
                 if game_data["players"][player_id_for_log].get("client_conn") == conn:
+                    # Log bevor client_conn auf None gesetzt wird
+                    print(f"SERVER SAFE_SEND (COMM ERROR - DISCONNECTING): P:{player_id_for_log} ({player_name_for_log}): Setze client_conn auf None wegen Fehler: {e}")
                     game_data["players"][player_id_for_log]["client_conn"] = None
         return False
     except Exception as e:
         print(f"SERVER SAFE_SEND (UNEXPECTED ERROR): P:{player_id_for_log} ({player_name_for_log}): {e}")
         traceback.print_exc()
+        # Bei unerwartetem Fehler auch Verbindung als unsicher betrachten
+        with data_lock:
+            if "players" in game_data and player_id_for_log in game_data["players"]:
+                if game_data["players"][player_id_for_log].get("client_conn") == conn:
+                    print(f"SERVER SAFE_SEND (UNEXPECTED ERROR - DISCONNECTING): P:{player_id_for_log} ({player_name_for_log}): Setze client_conn auf None wegen Fehler: {e}")
+                    game_data["players"][player_id_for_log]["client_conn"] = None
         return False
 
 
@@ -94,37 +101,34 @@ def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message=
     """ Setzt das Spiel komplett zurück, entfernt alle Spieler und startet eine frische Lobby. """
     global game_data
     
-    # --- Phase 1: Daten sammeln und game_data modifizieren (unter Lock) ---
-    players_to_notify_and_disconnect_info = [] # Lokale Liste für Infos außerhalb des Locks
+    players_to_notify_and_disconnect_info = [] 
 
-    with data_lock: # Sperre für den Zugriff auf game_data
-        print(f"SERVER LOGIC: Spiel wird zurückgesetzt. Notify Clients: {notify_clients_about_reset}")
+    with data_lock: 
+        print(f"SERVER LOGIC (RGS_ENTER_LOCK): Spiel wird zurückgesetzt. Notify Clients: {notify_clients_about_reset}")
 
-        if notify_clients_about_reset:
-            # Erstelle eine Kopie der Spielerliste, um Informationen zu sammeln
-            current_players_copy = list(game_data.get("players", {}).items())
+        current_players_snapshot_for_notification = {}
+        if notify_clients_about_reset and "players" in game_data:
+            print(f"SERVER LOGIC (RGS_PRE_COPY): Kopiere Spielerdaten für Benachrichtigung. Aktuelle Spieleranzahl: {len(game_data.get('players', {}))}")
+            current_players_snapshot_for_notification = {
+                p_id: {"conn": p_info.get("client_conn"), "name": p_info.get("name", "N/A")}
+                for p_id, p_info in game_data["players"].items()
+                if p_info.get("client_conn") 
+            }
+            print(f"SERVER LOGIC (RGS_POST_COPY): {len(current_players_snapshot_for_notification)} Spieler mit aktiver Verbindung für Benachrichtigung identifiziert.")
 
-            for p_id, p_info in current_players_copy:
-                conn_to_notify = p_info.get("client_conn")
-                p_name_log = p_info.get("name", "N/A")
-                if conn_to_notify:
-                    # Speichere die notwendigen Infos für die spätere Benachrichtigung/Trennung
-                    players_to_notify_and_disconnect_info.append({
-                        "id": p_id,
-                        "conn": conn_to_notify, # Wichtig: die Socket-Referenz speichern
-                        "name": p_name_log
-                    })
+
+        print(f"SERVER LOGIC (RGS_PRE_CLEAR): game_data wird jetzt geleert.")
+        game_data.clear() 
+        print(f"SERVER LOGIC (RGS_POST_CLEAR): game_data geleert.")
         
-        # Jetzt game_data zurücksetzen, immer noch innerhalb des Locks
-        game_data.clear() # Löscht alle alten Spiel- und Spielerdaten
         game_data.update({
             "status": GAME_STATE_LOBBY,
             "status_display": GAME_STATE_DISPLAY_NAMES[GAME_STATE_LOBBY],
-            "players": {}, # Leeres Spieler-Dictionary
+            "players": {}, 
             "game_start_time_actual": None,
             "game_end_time": None,
             "hider_wait_end_time": None,
-            "available_tasks": list(TASKS), # Aufgabenliste zurücksetzen
+            "available_tasks": list(TASKS), 
             "game_over_message": None,
             "hider_warning_active_for_current_cycle": False,
             "actual_game_over_time": None,
@@ -135,14 +139,25 @@ def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message=
             "updates_done_in_current_phase": 0,
             "next_location_broadcast_time": float('inf'),
         })
-        print("SERVER LOGIC: Spielzustand auf Initialwerte zurückgesetzt (game_data manipuliert).")
+        print("SERVER LOGIC (RGS_POST_UPDATE): Spielzustand auf Initialwerte zurückgesetzt (game_data manipuliert).")
+
+        if notify_clients_about_reset:
+            for p_id, p_snapshot_info in current_players_snapshot_for_notification.items():
+                conn_to_notify = p_snapshot_info["conn"]
+                p_name_log = p_snapshot_info["name"]
+                if conn_to_notify: 
+                    players_to_notify_and_disconnect_info.append({
+                        "id": p_id,
+                        "conn": conn_to_notify, 
+                        "name": p_name_log
+                    })
+        print(f"SERVER LOGIC (RGS_EXIT_LOCK): Lock wird freigegeben. {len(players_to_notify_and_disconnect_info)} Clients werden benachrichtigt/getrennt.")
     # --- data_lock wird hier freigegeben ---
 
-    # --- Phase 2: Netzwerkoperationen (außerhalb des Locks) ---
     if notify_clients_about_reset and players_to_notify_and_disconnect_info:
-        print(f"SERVER LOGIC: Beginne Benachrichtigung und Trennung von {len(players_to_notify_and_disconnect_info)} Clients (außerhalb des Locks).")
+        print(f"SERVER LOGIC (RGS_NOTIFY_LOOP_START): Beginne Benachrichtigung und Trennung von {len(players_to_notify_and_disconnect_info)} Clients (außerhalb des Locks).")
         
-        payload_for_reset = { # Payload einmal erstellen, um Redundanz zu vermeiden
+        payload_for_reset = { 
             "type": "game_update", 
             "player_id": None, 
             "error_message": reset_message,
@@ -150,38 +165,36 @@ def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message=
             "game_state": { "status": "disconnected", "status_display": reset_message, "game_over_message": reset_message }
         }
 
-        for player_info in players_to_notify_and_disconnect_info:
-            conn = player_info["conn"]
-            p_id = player_info["id"]
-            p_name = player_info["name"]
+        for player_info_item in players_to_notify_and_disconnect_info: # player_info_item um Namenskonflikt zu vermeiden
+            conn = player_info_item["conn"]
+            p_id = player_info_item["id"]
+            p_name = player_info_item["name"]
             
-            # Sende Benachrichtigung
-            # _safe_send_json wird client_conn in game_data nicht mehr auf None setzen,
-            # da game_data bereits geleert wurde. Das ist OK für diesen Reset-Fall.
             if _safe_send_json(conn, payload_for_reset, p_id, p_name):
-                print(f"SERVER RESET NOTIFY: An P:{p_id} ({p_name}) gesendet (außerhalb Lock).")
+                print(f"SERVER RESET NOTIFY (RGS_SEND_OK): An P:{p_id} ({p_name}) gesendet.")
             else:
-                print(f"SERVER RESET NOTIFY (SEND FAILED): P:{p_id} ({p_name}) (außerhalb Lock).")
+                print(f"SERVER RESET NOTIFY (RGS_SEND_FAIL): P:{p_id} ({p_name}).")
             
-            # Schließe die Verbindung explizit, da der Client ohnehin neu verbinden muss
             try:
-                # Es ist sicherer, shutdown vor close aufzurufen, um dem anderen Ende mitzuteilen,
-                # dass keine weiteren Daten gesendet werden.
+                print(f"SERVER RESET SHUTDOWN (RGS_SHUTDOWN_ATTEMPT): Versuche Shutdown für P:{p_id} ({p_name}).")
                 conn.shutdown(socket.SHUT_RDWR) 
+                print(f"SERVER RESET SHUTDOWN (RGS_SHUTDOWN_OK): Shutdown für P:{p_id} ({p_name}) erfolgreich.")
             except (OSError, socket.error) as e_shutdown:
-                # Ignoriere Fehler, wenn der Socket bereits geschlossen ist (z.B. "Socket is not connected")
-                if e_shutdown.errno not in [socket.EBADF, socket.ENOTCONN]: # EBADF: Bad file descriptor, ENOTCONN: Socket is not connected
-                    print(f"SERVER RESET: Fehler beim Socket-Shutdown für P:{p_id} ({p_name}): {e_shutdown} (außerhalb Lock).")
+                if e_shutdown.errno not in [socket.EBADF, socket.ENOTCONN, 107]: # 107 ist 'Transport endpoint is not connected' auf manchen Systemen
+                    print(f"SERVER RESET SHUTDOWN (RGS_SHUTDOWN_ERR_KNOWN): Fehler beim Socket-Shutdown für P:{p_id} ({p_name}): {e_shutdown} (errno {e_shutdown.errno}).")
+                else:
+                    print(f"SERVER RESET SHUTDOWN (RGS_SHUTDOWN_ERR_IGNORED): Socket für P:{p_id} ({p_name}) bereits nicht verbunden/geschlossen: {e_shutdown} (errno {e_shutdown.errno}).")
             except Exception as e_shutdown_generic:
-                 print(f"SERVER RESET: Generischer Fehler beim Socket-Shutdown für P:{p_id} ({p_name}): {e_shutdown_generic} (außerhalb Lock).")
+                 print(f"SERVER RESET SHUTDOWN (RGS_SHUTDOWN_ERR_GENERIC): Generischer Fehler beim Socket-Shutdown für P:{p_id} ({p_name}): {e_shutdown_generic}.")
             finally:
                 try:
+                    print(f"SERVER RESET CLOSE (RGS_CLOSE_ATTEMPT): Versuche Close für P:{p_id} ({p_name}).")
                     conn.close()
-                    print(f"SERVER RESET: Socket für P:{p_id} ({p_name}) explizit geschlossen (außerhalb Lock).")
+                    print(f"SERVER RESET CLOSE (RGS_CLOSE_OK): Socket für P:{p_id} ({p_name}) explizit geschlossen.")
                 except Exception as e_close:
-                    print(f"SERVER RESET: Fehler beim expliziten Schließen des Sockets für P:{p_id} ({p_name}): {e_close} (außerhalb Lock).")
+                    print(f"SERVER RESET CLOSE (RGS_CLOSE_ERR): Fehler beim expliziten Schließen des Sockets für P:{p_id} ({p_name}): {e_close}.")
     
-    print("SERVER LOGIC: reset_game_to_initial_state abgeschlossen.")
+    print("SERVER LOGIC (RGS_END): reset_game_to_initial_state abgeschlossen.")
 
 def get_active_lobby_players_data():
     active_lobby_players = {}
@@ -228,7 +241,6 @@ def assign_task_to_hider(player_id):
 
         available_tasks_list = game_data.get("available_tasks")
         if not player.get("task") and available_tasks_list:
-            # Stelle sicher, dass die Aufgabe nicht bereits zugewiesen ist, um Duplikate zu vermeiden
             assigned_tasks = {p_info.get("task", {}).get("id") for p_info in game_data["players"].values() if p_info.get("task")}
             possible_tasks = [t for t in available_tasks_list if t.get("id") not in assigned_tasks]
 
@@ -248,65 +260,52 @@ def count_active_players_for_early_end():
                    if p_info.get("status_ingame") == "active" and p_info.get("confirmed_for_lobby"))
 
 def _calculate_and_set_next_broadcast_time(current_time):
-    """Berechnet und setzt den nächsten Hider-Standort-Broadcast-Zeitpunkt basierend auf der aktuellen Phase."""
     with data_lock:
         phase_idx = game_data.get("current_phase_index", -1)
 
-        # Wenn Phasen-Index ungültig oder alle Phasen abgeschlossen sind
         if phase_idx < 0 or phase_idx >= len(PHASE_DEFINITIONS):
             game_data["next_location_broadcast_time"] = float('inf')
             if phase_idx >= len(PHASE_DEFINITIONS) and game_data.get("status") == GAME_STATE_RUNNING:
-                 print("SERVER LOGIC: Alle Update-Phasen abgeschlossen. Standort-Updates beendet (Spiel läuft weiter bis Zeitende).")
+                 print("SERVER LOGIC: Alle Update-Phasen abgeschlossen. Standort-Updates beendet.")
             return
 
         phase_def = PHASE_DEFINITIONS[phase_idx]
-
-        # Phasenübergang prüfen (außer für "is_initial_reveal", das speziell behandelt wird)
         phase_ended_by_duration = False
-        # Dauerprüfung nur nach dem Initial Reveal (oder wenn es eine Dauer-Phase ist)
         if not phase_def.get("is_initial_reveal"):
             phase_ended_by_duration = (phase_def["duration_seconds"] != float('inf') and
                                    current_time >= game_data.get("current_phase_start_time", 0) + phase_def["duration_seconds"])
 
-        # Eine Phase endet, wenn die Updates done >= updates_in_phase sind
         phase_ended_by_updates = ("updates_in_phase" in phase_def and
                                   game_data.get("updates_done_in_current_phase", 0) >= phase_def["updates_in_phase"])
 
-        # Wenn Initial Reveal abgeschlossen ist oder die aktuelle Phase beendet ist
         if (phase_def.get("is_initial_reveal") and game_data.get("updates_done_in_current_phase", 0) > 0) or \
            phase_ended_by_duration or phase_ended_by_updates:
             game_data["current_phase_index"] += 1
-            phase_idx = game_data["current_phase_index"] # Index für neue Phase
+            phase_idx = game_data["current_phase_index"] 
 
-        if phase_idx >= len(PHASE_DEFINITIONS): # Erneut prüfen nach Inkrementierung
+        if phase_idx >= len(PHASE_DEFINITIONS): 
             game_data["next_location_broadcast_time"] = float('inf')
-            print("SERVER LOGIC: Alle Update-Phasen abgeschlossen. Standort-Updates beendet (Spiel läuft weiter bis Zeitende).")
+            print("SERVER LOGIC: Alle Update-Phasen abgeschlossen (nach Inkrement). Standort-Updates beendet.")
             return
 
-        # Wenn eine neue Phase beginnt (oder Index aktualisiert wurde)
-        # Die Bedingung `game_data.get("_last_calculated_phase_idx_for_broadcast", -2)` verhindert unnötige Logs
-        # wenn der Index schon korrekt gesetzt wurde und die Phase läuft.
-        # Für den Initial Reveal stellen wir sicher, dass er beim ersten Durchlauf (updates_done_in_current_phase == 0) erkannt wird.
         if phase_idx != game_data.get("_last_calculated_phase_idx_for_broadcast", -2) or \
            (PHASE_DEFINITIONS[phase_idx].get("is_initial_reveal") and game_data.get("updates_done_in_current_phase", 0) == 0):
             game_data["current_phase_start_time"] = current_time
-            game_data["updates_done_in_current_phase"] = 0 # Reset für neue Phase (außer bei Initial Reveal, wo 1 Update zählt)
-            phase_def = PHASE_DEFINITIONS[phase_idx] # phase_def neu laden für die neue Phase
+            game_data["updates_done_in_current_phase"] = 0 
+            phase_def = PHASE_DEFINITIONS[phase_idx] 
             print(f"SERVER LOGIC: Starte/Weiter mit Phase {phase_idx}: {phase_def['name']}")
-            game_data["_last_calculated_phase_idx_for_broadcast"] = phase_idx # Merke diesen Index
+            game_data["_last_calculated_phase_idx_for_broadcast"] = phase_idx 
 
-        # Nächsten Broadcast-Zeitpunkt für die aktuelle (ggf. neue) Phase setzen
         if "update_interval_seconds" in phase_def:
             game_data["next_location_broadcast_time"] = current_time + phase_def["update_interval_seconds"]
         elif "updates_in_phase" in phase_def and phase_def["updates_in_phase"] > 0:
-            # Die Dauer der Phase muss >= 0 sein
             if phase_def["duration_seconds"] > 0:
                 interval = phase_def["duration_seconds"] / phase_def["updates_in_phase"]
                 game_data["next_location_broadcast_time"] = current_time + interval
-            else: # Für Initial Reveal (duration_seconds=0) oder andere 0-Dauer-Phasen
-                 game_data["next_location_broadcast_time"] = current_time # Sofortiger Broadcast
+            else: 
+                 game_data["next_location_broadcast_time"] = current_time 
         else:
-            game_data["next_location_broadcast_time"] = float('inf') # Keine weiteren Updates in dieser Phase
+            game_data["next_location_broadcast_time"] = float('inf')
 
         if game_data["next_location_broadcast_time"] != float('inf'):
             delay_seconds = int(game_data['next_location_broadcast_time'] - current_time)
@@ -319,23 +318,20 @@ def send_data_to_one_client(conn, player_id_for_perspective):
     player_name_for_log = "N/A_IN_SEND_INIT"
     try:
         with data_lock:
-            # Prüfe, ob der Spieler überhaupt noch im game_data existiert.
-            # Dies ist entscheidend, um Fehler zu vermeiden, wenn ein Spieler gerade entfernt wurde.
             if player_id_for_perspective not in game_data.get("players", {}):
                 if conn:
-                    # Sende eine Nachricht, die den Client anweist, seinen Zustand zu resetten.
                     null_player_payload = {
                         "type": "game_update",
-                        "player_id": None, # Wichtig: null setzen, damit Client seinen Zustand resetet
+                        "player_id": None, 
                         "message": "Du wurdest aus dem Spiel entfernt oder der Server wurde zurückgesetzt.",
                         "join_error": "Du bist nicht mehr Teil des aktuellen Spiels. Bitte neu beitreten.",
                         "game_state": { "status": "disconnected", "status_display": "Sitzung ungültig." }
                     }
                     _safe_send_json(conn, null_player_payload, player_id_for_perspective, "N/A (Player not in game_data)")
-                return False # Indikator, dass Senden nicht erfolgreich war oder nicht versucht wurde
+                return False 
 
             player_info = game_data["players"].get(player_id_for_perspective)
-            if not player_info: return False # Doppelte Prüfung
+            if not player_info: return False 
 
             player_name_for_log = player_info.get("name", f"Unbekannt_{player_id_for_perspective}")
             p_role = player_info.get("current_role", "hider")
@@ -351,7 +347,7 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                     "status_display": "Warten auf nächste Lobby-Runde",
                     "game_time_left": 0,
                     "hider_wait_time_left": 0,
-                    "game_over_message": None # Keine Game Over Nachricht im Wartestatus
+                    "game_over_message": None 
                 }
             else:
                 payload_game_state = {
@@ -364,18 +360,17 @@ def send_data_to_one_client(conn, player_id_for_perspective):
 
             payload = {
                 "type": "game_update",
-                "player_id": player_id_for_perspective, # Immer die korrekte ID des Spielers senden
+                "player_id": player_id_for_perspective, 
                 "player_name": player_name_for_log,
                 "role": p_role,
                 "location": player_info.get("location"),
                 "confirmed_for_lobby": player_info.get("confirmed_for_lobby", False),
                 "player_is_ready": player_info.get("is_ready", False),
                 "player_status": player_info.get("status_ingame", "active"),
-                "is_waiting_for_lobby": is_waiting_for_lobby, # Zustand für den Client
+                "is_waiting_for_lobby": is_waiting_for_lobby, 
                 "game_state": payload_game_state,
                 "lobby_players": get_active_lobby_players_data() if current_game_status == GAME_STATE_LOBBY and not is_waiting_for_lobby else {},
                 "all_players_status": get_all_players_public_status(),
-                # Leaderboard nur für Hider oder am Spielende senden
                 "hider_leaderboard": get_hider_leaderboard() if p_role == "hider" or current_game_status in [GAME_STATE_HIDER_WINS, GAME_STATE_SEEKER_WINS] else None,
                 "hider_location_update_imminent": player_info.get("has_pending_location_warning", False) if p_role == "hider" and not is_waiting_for_lobby else False,
                 "early_end_requests_count": len(game_data.get("early_end_requests", set())) if not is_waiting_for_lobby else 0,
@@ -393,20 +388,18 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                         "points": p_task_info.get("points", 0),
                         "time_left_seconds": max(0, int(player_info.get("task_deadline", 0) - time.time())) if player_info.get("task_deadline") else 0
                     }
-                else: # Wenn kein Task vorhanden, aber Hider, dann explizit auf None setzen
+                else: 
                     payload["current_task"] = None
                 
-                # Hinzufügen von pre_cached_tasks für Hider
                 payload["pre_cached_tasks"] = []
-                if player_info.get("status_ingame") == "active": # Nur für aktive Hider Aufgaben vorcachen
+                if player_info.get("status_ingame") == "active": 
                     available_tasks_list_copy = list(game_data.get("available_tasks", []))
-                    # IDs bereits zugewiesener Aufgaben (aller Spieler)
                     assigned_task_ids = {p.get("task", {}).get("id") for p in game_data.get("players", {}).values() if p.get("task")}
                     
                     unassigned_tasks = [t for t in available_tasks_list_copy if t.get("id") not in assigned_task_ids]
-                    random.shuffle(unassigned_tasks) # Mischen für etwas Varianz
+                    random.shuffle(unassigned_tasks) 
                     
-                    for i in range(min(2, len(unassigned_tasks))): # Bis zu 2 Aufgaben
+                    for i in range(min(2, len(unassigned_tasks))): 
                         task_to_cache = unassigned_tasks[i]
                         payload["pre_cached_tasks"].append({
                             "id": task_to_cache.get("id"),
@@ -417,9 +410,8 @@ def send_data_to_one_client(conn, player_id_for_perspective):
 
             if p_role == "seeker" and not is_waiting_for_lobby:
                 visible_hiders = {}
-                current_players_copy = dict(game_data.get("players", {})) # Sicherstellen, dass wir eine Kopie bearbeiten
+                current_players_copy = dict(game_data.get("players", {})) 
                 for h_id, h_info in current_players_copy.items():
-                    # Nur aktive Hider, die nicht offline sind, und eine Position haben
                     if h_info.get("current_role") == "hider" and \
                        h_info.get("status_ingame") == "active" and \
                        h_info.get("location"):
@@ -429,29 +421,27 @@ def send_data_to_one_client(conn, player_id_for_perspective):
                             "timestamp": time.strftime("%H:%M:%S", time.localtime(h_info.get("last_location_timestamp", time.time())))
                         }
                 payload["hider_locations"] = visible_hiders
-            else: # Wenn nicht Seeker, keine Hider-Standorte senden
-                payload["hider_locations"] = {} # oder None, je nachdem, was der Client erwartet
+            else: 
+                payload["hider_locations"] = {} 
 
-        # Der _safe_send_json Aufruf ist außerhalb des data_lock Blocks,
-        # um den Lock nicht unnötig lange zu halten während der Netzwerk-I/O.
         if conn and payload:
              return _safe_send_json(conn, payload, player_id_for_perspective, player_name_for_log)
 
-    except Exception as e: # Generischer Fehler beim Zusammenstellen des Payloads etc.
+    except Exception as e: 
         print(f"SERVER SEND (ERROR - UNEXPECTED in prep): P:{player_id_for_perspective} ({player_name_for_log}): Unerwarteter Fehler: {e}")
         traceback.print_exc()
-    return False # Fallback
+    return False 
 
 
 def broadcast_full_game_state_to_all(exclude_pid=None):
     players_to_update_with_conn = []
     with data_lock:
         for pid, pinfo in game_data.get("players", {}).items():
-            if pid != exclude_pid and pinfo.get("client_conn"): # Nur Spieler mit aktiver Verbindung
+            if pid != exclude_pid and pinfo.get("client_conn"): 
                 players_to_update_with_conn.append((pid, pinfo["client_conn"]))
 
     for p_id_to_update, conn_to_use in players_to_update_with_conn:
-        send_data_to_one_client(conn_to_use, p_id_to_update) # _safe_send_json wird client_conn auf None setzen bei Fehler.
+        send_data_to_one_client(conn_to_use, p_id_to_update) 
 
 
 def broadcast_server_text_notification(message_text, target_player_ids=None, role_filter=None):
@@ -472,44 +462,39 @@ def broadcast_server_text_notification(message_text, target_player_ids=None, rol
 def check_game_conditions_and_end():
     with data_lock:
         current_game_status = game_data.get("status")
-        if current_game_status != GAME_STATE_RUNNING: return False # Nur prüfen, wenn das Spiel läuft
+        if current_game_status != GAME_STATE_RUNNING: return False 
 
         current_time = time.time()
         original_hiders_exist = False
-        active_hiders_in_game = 0 # Nur Hider, die im Spiel gestartet sind und noch aktiv sind (nicht offline)
+        active_hiders_in_game = 0 
 
-        for p_id, p_info in list(game_data.get("players", {}).items()): # Iteriere über eine Kopie
+        for p_id, p_info in list(game_data.get("players", {}).items()): 
             if not p_info: continue
 
             if p_info.get("original_role") == "hider":
                 original_hiders_exist = True
-                if p_info.get("status_ingame") == "active": # Nur wirklich aktive Hider zählen
+                if p_info.get("status_ingame") == "active": 
                     active_hiders_in_game += 1
 
-                # Überprüfung der Aufgaben-Deadline für aktive Hider
                 if p_info.get("current_role") == "hider" and p_info.get("status_ingame") == "active":
                     if p_info.get("task") and p_info.get("task_deadline") and current_time > p_info["task_deadline"]:
                         task_description_for_log = p_info.get('task',{}).get('description','N/A')
                         player_name_for_log = p_info.get('name','N/A')
-                        # Stellen Sie sicher, dass der Spieler noch existiert, bevor Sie Änderungen vornehmen
                         if p_id in game_data.get("players", {}):
-                            game_data["players"][p_id]["task"] = None # Aufgabe entfernen
+                            game_data["players"][p_id]["task"] = None 
                             game_data["players"][p_id]["task_deadline"] = None
                             broadcast_server_text_notification(f"Hider {player_name_for_log} hat Aufgabe '{task_description_for_log}' NICHT rechtzeitig geschafft! Aufgabe entfernt.")
-                            assign_task_to_hider(p_id) # Neue Aufgabe zuweisen
+                            assign_task_to_hider(p_id) 
 
-        # Überprüfung der Gewinnbedingungen
         if original_hiders_exist and active_hiders_in_game == 0:
-            # Alle Hider sind gefangen oder haben das Spiel verlassen
             game_data["status"] = GAME_STATE_SEEKER_WINS
             game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_SEEKER_WINS]
             game_data["game_over_message"] = "Alle Hider ausgeschieden/gefangen. Seeker gewinnen!"
-            game_data["early_end_requests"].clear() # Alle frühzeitigen Endanfragen löschen
+            game_data["early_end_requests"].clear() 
             print("SERVER LOGIC: Spiel beendet - Seeker gewinnen (alle Hider gefangen).")
             return True
 
         if not original_hiders_exist and len(game_data.get("players", {})) >= 1 and any(p.get("confirmed_for_lobby") for p in game_data.get("players", {}).values()):
-            # Fall, dass keine Hider das Spiel gestartet haben
             game_data["status"] = GAME_STATE_SEEKER_WINS
             game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_SEEKER_WINS]
             game_data["game_over_message"] = "Keine Hider im Spiel gestartet. Seeker gewinnen!"
@@ -518,7 +503,6 @@ def check_game_conditions_and_end():
             return True
 
         if game_data.get("game_end_time") and current_time > game_data["game_end_time"]:
-            # Zeit abgelaufen
             final_active_hiders_at_timeout = sum(1 for p_info_final in game_data.get("players", {}).values()
                                                  if p_info_final.get("current_role") == "hider" and p_info_final.get("status_ingame") == "active")
             game_data["status"] = GAME_STATE_HIDER_WINS if final_active_hiders_at_timeout > 0 else GAME_STATE_SEEKER_WINS
@@ -528,51 +512,53 @@ def check_game_conditions_and_end():
             print(f"SERVER LOGIC: Spiel beendet - Zeit abgelaufen. Status: {game_data['status_display']}.")
             return True
 
-        return False # Spiel läuft weiter
+        return False 
 
 def handle_client_connection(conn, addr):
-    player_id = None # player_id dieses Handlers, initial None
-    player_name_for_log = "Unbekannt_Init" # Für Logs dieses Handlers
-    action_for_log = "N/A" # Für Logs
+    player_id = None 
+    player_name_for_log = "Unbekannt_Init" 
+    action_for_log = "N/A" 
 
-    print(f"SERVER CONN: Neue Verbindung von {addr}.")
+    print(f"SERVER HANDLER: Thread für {addr} gestartet.")
     try:
         buffer = ""
         while True:
             try:
+                print(f"SERVER HANDLER ({addr}, P:{player_id}, Name:{player_name_for_log}): Wartet auf Daten (recv)...")
                 data_chunk = conn.recv(4096)
-                if not data_chunk: # Client hat Verbindung geschlossen
-                    print(f"SERVER COMM: Client {addr} (P:{player_id}) hat Verbindung geschlossen (recv returned empty).")
-                    break # Verlasse die innere while True Schleife
+                print(f"SERVER HANDLER ({addr}, P:{player_id}, Name:{player_name_for_log}): Empfangen {len(data_chunk)} bytes.")
+                
+                if not data_chunk: 
+                    print(f"SERVER COMM: Client {addr} (P:{player_id}, Name:{player_name_for_log}) hat Verbindung geschlossen (recv returned empty).")
+                    break 
                 buffer += data_chunk.decode('utf-8')
 
                 while '\n' in buffer:
                     message_str, buffer = buffer.split('\n', 1)
-                    if not message_str.strip(): continue # Leere Nachricht ignorieren
+                    if not message_str.strip(): continue 
                     message = json.loads(message_str)
                     action = message.get("action"); action_for_log = action
+                    print(f"SERVER HANDLER ({addr}, P:{player_id}, Name:{player_name_for_log}): Aktion '{action}' erhalten.")
+
 
                     with data_lock:
                         current_game_status_in_handler = game_data.get("status")
 
-                        # --- AKTION: FORCE_SERVER_RESET_FROM_CLIENT ---
-                        # Kann von jedem Client ausgelöst werden, unabhängig von player_id
                         if action == "FORCE_SERVER_RESET_FROM_CLIENT":
                             client_name_for_reset_log = player_name_for_log if player_id else f"Client {addr[0]}:{addr[1]}"
                             print(f"SERVER ADMIN: {client_name_for_reset_log} hat Server-Reset (FORCE_SERVER_RESET_FROM_CLIENT) angefordert.")
 
                             reset_message_for_clients = f"Server wurde von '{client_name_for_reset_log}' zurückgesetzt. Bitte neu beitreten."
+                            # Wichtig: reset_game_to_initial_state gibt den data_lock intern frei und nimmt ihn wieder
                             reset_game_to_initial_state(notify_clients_about_reset=True, reset_message=reset_message_for_clients)
-
-                            # Sende ACK an den auslösenden Client.
-                            # Da der Server neu initialisiert wird und alle Clients benachrichtigt/geschlossen werden,
-                            # ist es möglich, dass dieser Send fehlschlägt, aber das ist in Ordnung.
+                            
+                            # Der data_lock ist nach reset_game_to_initial_state wieder verfügbar.
+                            # Wir müssen ihn hier nicht explizit nehmen, da _safe_send_json es intern tut, wenn nötig.
                             ack_payload = {"type": "acknowledgement", "message": "Server wurde erfolgreich zurückgesetzt."}
-                            _safe_send_json(conn, ack_payload, player_id, player_name_for_log)
-                            return # Beendet den Handler-Thread, da der Server neu startet.
+                            _safe_send_json(conn, ack_payload, player_id, player_name_for_log) # player_id könnte hier alt sein, aber ist ok für Log
+                            print(f"SERVER ADMIN: Reset-ACK an {client_name_for_reset_log} gesendet. Handler-Thread wird beendet.")
+                            return 
 
-                        # --- AKTION: JOIN_GAME ---
-                        # Nur akzeptieren, wenn dieser Handler noch keine player_id hat.
                         if action == "JOIN_GAME" and player_id is None:
                             p_name = message.get("name", f"Anon_{random.randint(1000,9999)}")
                             MAX_NICKNAME_LENGTH = 50
@@ -580,65 +566,65 @@ def handle_client_connection(conn, addr):
                                 p_name = p_name[:MAX_NICKNAME_LENGTH] + "..."
                                 print(f"SERVER JOIN WARN: Nickname von {addr} auf {MAX_NICKNAME_LENGTH} Zeichen gekürzt.")
 
-                            p_role_pref = message.get("role_preference", "hider") # Client sendet "role_preference"
+                            p_role_pref = message.get("role_preference", "hider") 
                             if p_role_pref not in ["hider", "seeker"]: p_role_pref = "hider"
-                            player_name_for_log = p_name # Für spätere Logs dieses Handlers
+                            player_name_for_log_temp = p_name # Für Logs, bevor player_id gesetzt ist
 
-                            # Prüfung auf Namenskonflikte für aktive, verbundene Spieler
                             is_name_taken = False
+                            # Loggen des aktuellen game_data["players"] vor der Prüfung
+                            print(f"SERVER JOIN (Name Check für '{p_name}'): Aktive Spieler: { {pid: pinfo.get('name') for pid, pinfo in game_data.get('players', {}).items() if pinfo.get('client_conn') is not None} }")
                             for pid_check, pinfo_check in game_data.get("players", {}).items():
-                                # Ein Name ist belegt, wenn er existiert, der Spieler verbunden ist und nicht dieser Spieler selbst ist (falls er reconnected hat)
-                                if pinfo_check.get("name") == p_name and pinfo_check.get("client_conn") is not None and pid_check != player_id:
+                                if pinfo_check.get("name") == p_name and pinfo_check.get("client_conn") is not None: # pid_check != player_id ist hier irrelevant, da player_id noch None
                                     is_name_taken = True
+                                    print(f"SERVER JOIN (Name Check für '{p_name}'): Name von P:{pid_check} ({pinfo_check.get('name')}) als belegt erkannt.")
                                     break
-
+                            
                             if is_name_taken:
-                                print(f"SERVER JOIN (FAIL): Name '{p_name}' ist bereits von einem aktiven Spieler belegt. {addr}")
+                                print(f"SERVER JOIN (FAIL - NAME TAKEN): Name '{p_name}' ist bereits von einem aktiven Spieler belegt. Client: {addr}")
                                 error_payload = {
-                                    "type": "game_update",
-                                    "player_id": None, # Wichtig: Signalisiert dem Client, dass er keinen gültigen Spieler hat
+                                    "type": "game_update", "player_id": None, 
                                     "error_message": f"Name '{p_name}' bereits vergeben. Wähle einen anderen Namen.",
                                     "join_error": f"Name '{p_name}' bereits vergeben.",
                                     "game_state": { "status": "disconnected", "status_display": "Beitritt fehlgeschlagen."}
                                 }
                                 _safe_send_json(conn, error_payload, "N/A_JOIN_FAIL_NAME_TAKEN", p_name)
-                                return # Beendet den Handler-Thread, da Join nicht möglich
+                                print(f"SERVER HANDLER ({addr}): Join fehlgeschlagen (Name belegt), Handler-Thread wird beendet.")
+                                return 
 
-                            # Generiere eine neue eindeutige Spieler-ID
                             base_id = str(addr[1]) + "_" + str(random.randint(1000, 9999))
                             id_counter = 0; temp_id_candidate = base_id
                             while temp_id_candidate in game_data.get("players", {}):
                                 id_counter += 1; temp_id_candidate = f"{base_id}_{id_counter}"
-                            player_id = temp_id_candidate # Die player_id für DIESEN Handler wird hier gesetzt!
+                            player_id = temp_id_candidate 
+                            player_name_for_log = p_name # Name für diesen Handler aktualisieren
 
                             player_entry_data = {
                                 "addr": addr, "name": p_name, "original_role": p_role_pref, "current_role": p_role_pref,
                                 "location": None, "last_seen": time.time(), "client_conn": conn,
-                                "confirmed_for_lobby": True, # NEU: Spieler ist sofort in der Lobby
+                                "confirmed_for_lobby": True, 
                                 "is_ready": False, "status_ingame": "active",
-                                "status_before_offline": "active", # NEU: Status vor dem Offline-Gehen
+                                "status_before_offline": "active", 
                                 "points": 0, "has_pending_location_warning": False,
                                 "last_location_update_after_warning": 0, "warning_sent_time": 0, "last_location_timestamp": 0,
                                 "task": None, "task_deadline": None,
                                 "task_skips_available": INITIAL_TASK_SKIPS if p_role_pref == "hider" else 0,
-                                "is_waiting_for_lobby": False # Standard, wird unten überschrieben falls nötig
+                                "is_waiting_for_lobby": False 
                             }
 
-                            # Wenn das Spiel schon in einer Endphase ist, den Server für neue Joins resetten
                             if current_game_status_in_handler in [GAME_STATE_HIDER_WINS, GAME_STATE_SEEKER_WINS]:
-                                print(f"SERVER JOIN: Spiel war beendet. Server wird für neue Runde zurückgesetzt, {p_name} ({player_id}) tritt bei.")
-                                reset_game_to_initial_state(notify_clients_about_reset=False) # Nur Daten resetten, keine Clients benachrichtigen
-                                current_game_status_in_handler = game_data.get("status") # Status nach Reset neu holen
+                                print(f"SERVER JOIN: Spiel war beendet ({current_game_status_in_handler}). Server wird für neue Runde zurückgesetzt, {p_name} ({player_id}) tritt bei.")
+                                reset_game_to_initial_state(notify_clients_about_reset=False) 
+                                current_game_status_in_handler = game_data.get("status") 
 
                                 game_data.setdefault("players", {})[player_id] = player_entry_data
+                                print(f"SERVER JOIN-PLAYER-CREATED (nach Reset): {p_name} ({player_id}) von {addr}.")
                                 send_data_to_one_client(conn, player_id)
-                                broadcast_full_game_state_to_all(exclude_pid=player_id) # Andere über neuen Spieler informieren
+                                broadcast_full_game_state_to_all(exclude_pid=player_id) 
 
                             elif current_game_status_in_handler in [GAME_STATE_HIDER_WAIT, GAME_STATE_RUNNING]:
-                                # Spiel läuft bereits, Spieler wird auf die Warteliste gesetzt
                                 player_entry_data["is_waiting_for_lobby"] = True
                                 game_data.setdefault("players", {})[player_id] = player_entry_data
-                                print(f"SERVER JOIN-PLAYER-WAITING: {p_name} ({player_id}) von {addr} zur Warteliste hinzugefügt (Spiel läuft).")
+                                print(f"SERVER JOIN-PLAYER-WAITING: {p_name} ({player_id}) von {addr} zur Warteliste hinzugefügt (Spiel läuft: {current_game_status_in_handler}).")
 
                                 join_wait_message = {
                                     "type": "game_update", "player_id": player_id,
@@ -650,20 +636,16 @@ def handle_client_connection(conn, addr):
                                     "message": "Spiel läuft. Du bist auf der Warteliste."
                                 }
                                 _safe_send_json(conn, join_wait_message, player_id, p_name)
-                                # Kein broadcast_full_game_state_to_all, da wartende Spieler für andere unsichtbar sind.
-
-                            else: # Implizit GAME_STATE_LOBBY
+                            else: 
                                 game_data.setdefault("players", {})[player_id] = player_entry_data
-                                print(f"SERVER JOIN-PLAYER-CREATED (lobby): {p_name} ({player_id}) von {addr}.")
-                                send_data_to_one_client(conn, player_id) # Zuerst den neuen Spieler updaten
-                                broadcast_full_game_state_to_all(exclude_pid=player_id) # Dann alle anderen
-                            continue # Nachrichtenverarbeitung für diese Schleife beendet
+                                print(f"SERVER JOIN-PLAYER-CREATED (Lobby): {p_name} ({player_id}) von {addr}.")
+                                send_data_to_one_client(conn, player_id) 
+                                broadcast_full_game_state_to_all(exclude_pid=player_id) 
+                            continue 
 
-                        # --- AKTION: REJOIN_GAME ---
-                        # Nur akzeptieren, wenn dieser Handler noch keine player_id hat.
                         elif action == "REJOIN_GAME" and player_id is None:
                             rejoin_player_id = message.get("player_id")
-                            rejoin_player_name = message.get("name") # Client sendet auch den Namen
+                            rejoin_player_name = message.get("name") 
                             action_for_log = f"REJOIN_GAME (Attempt ID: {rejoin_player_id}, Name: {rejoin_player_name})"
                             print(f"SERVER RECV: {action_for_log} from {addr}")
 
@@ -671,81 +653,71 @@ def handle_client_connection(conn, addr):
                             if rejoin_player_id and rejoin_player_id in game_data.get("players", {}):
                                 player_entry = game_data["players"][rejoin_player_id]
 
-                                # Optional: Namensüberprüfung (Warnung, aber kein Abbruch)
                                 if player_entry.get("name") != rejoin_player_name:
                                     print(f"SERVER REJOIN WARN: Name mismatch for ID {rejoin_player_id}. Client: '{rejoin_player_name}', Server: '{player_entry.get('name')}'. Rejoin trotzdem erlaubt.")
 
                                 old_conn = player_entry.get("client_conn")
                                 if old_conn and old_conn != conn:
-                                    # Wenn der alte Client-Handler noch aktiv ist, könnte er diese alte Verbindung schließen.
-                                    # Wir setzen hier einfach die neue Verbindung.
-                                    print(f"SERVER REJOIN: Spieler {player_entry.get('name')} ({rejoin_player_id}) hatte alte Verbindung. Aktualisiere auf neue.")
-                                    try: # Versuche die alte Verbindung zu schließen, wenn sie noch offen ist
+                                    print(f"SERVER REJOIN: Spieler {player_entry.get('name')} ({rejoin_player_id}) hatte alte Verbindung {old_conn}. Aktualisiere auf neue {conn}.")
+                                    try: 
                                         old_conn.shutdown(socket.SHUT_RDWR)
                                         old_conn.close()
+                                        print(f"SERVER REJOIN: Alte Verbindung für {rejoin_player_id} erfolgreich geschlossen.")
                                     except Exception as e:
                                         print(f"SERVER REJOIN WARN: Fehler beim Schließen alter Verbindung für {rejoin_player_id}: {e}")
-
-                                player_entry["client_conn"] = conn # Neue Verbindung zuweisen
+                                
+                                player_entry["client_conn"] = conn 
                                 player_entry["addr"] = addr
-                                player_entry["last_seen"] = time.time() # Aktualisiere letzte Aktivität
-                                player_id = rejoin_player_id # Diesem Handler die Spieler-ID zuweisen
+                                player_entry["last_seen"] = time.time() 
+                                player_id = rejoin_player_id 
                                 player_name_for_log = player_entry.get("name", rejoin_player_name)
                                 found_player_to_rejoin = True
 
-                                # NEU: Spielerstatus auf den vorherigen aktiven Status zurücksetzen
                                 if player_entry.get("status_ingame") == "offline":
                                     previous_status = player_entry.get("status_before_offline", "active")
                                     player_entry["status_ingame"] = previous_status
-                                    player_entry.pop("status_before_offline", None) # Temporäres Feld entfernen
-                                    broadcast_server_text_notification(f"Spieler {player_entry.get('name', rejoin_player_name)} ist wieder online (Status: {previous_status}).")
+                                    player_entry.pop("status_before_offline", None) 
+                                    broadcast_server_text_notification(f"Spieler {player_name_for_log} ist wieder online (Status: {previous_status}).")
                                     print(f"SERVER REJOIN: Spieler {player_name_for_log} ({player_id}) Status von 'offline' auf '{previous_status}' gesetzt.")
 
-
                                 print(f"SERVER REJOIN (SUCCESS): Spieler {player_name_for_log} ({player_id}) re-assoziiert mit neuer Verbindung von {addr}")
-                                send_data_to_one_client(conn, player_id) # Wichtig: Zuerst den Rejoiner updaten
-                                broadcast_full_game_state_to_all(exclude_pid=player_id) # Dann die anderen (implizites Update über Connect/Disconnect)
+                                send_data_to_one_client(conn, player_id) 
+                                broadcast_full_game_state_to_all(exclude_pid=player_id) 
                             else:
-                                # Spieler-ID nicht im Server bekannt (z.B. Server wurde resettet oder zu lange offline)
-                                print(f"SERVER REJOIN (FAIL): Spieler-ID '{rejoin_player_id}' nicht gefunden für {addr}.")
+                                print(f"SERVER REJOIN (FAIL): Spieler-ID '{rejoin_player_id}' nicht gefunden für {addr}. Aktuelle Spieler-IDs: {list(game_data.get('players', {}).keys())}")
                                 rejoin_fail_payload = {
-                                    "type": "game_update",
-                                    "player_id": None, # Signalisiert dem Client, dass er keinen gültigen Spieler hat
+                                    "type": "game_update", "player_id": None, 
                                     "error_message": f"Rejoin fehlgeschlagen. Spieler-ID '{rejoin_player_id}' nicht mehr gültig oder gefunden.",
                                     "join_error": f"Rejoin fehlgeschlagen. Spieler-ID '{rejoin_player_id}' nicht mehr gültig oder gefunden.",
                                     "game_state": { "status": "disconnected", "status_display": "Rejoin fehlgeschlagen."}
                                 }
                                 _safe_send_json(conn, rejoin_fail_payload, "N/A_REJOIN_FAIL", "N/A_REJOIN_FAIL")
-                                return # Beendet diesen Handler-Thread, da der Rejoin fehlschlug.
-                            continue # Nachrichtenverarbeitung für diese Schleife beendet
+                                print(f"SERVER HANDLER ({addr}): Rejoin fehlgeschlagen, Handler-Thread wird beendet.")
+                                return 
+                            continue 
 
-                        # --- Prüfung der Authentifizierung (für alle weiteren Aktionen) ---
-                        # Wenn wir hier sind, aber player_id immer noch None ist, oder player_id nicht mehr existiert,
-                        # ist der Client nicht authentifiziert oder seine Sitzung ist ungültig.
                         if not player_id or player_id not in game_data.get("players", {}):
-                            print(f"SERVER WARN: Unauthentifizierter/Entfernter Client von {addr} sendet Aktion '{action}'. Player_id im Handler: {player_id}. Verbindung wird getrennt.")
+                            print(f"SERVER WARN: Unauthentifizierter/Entfernter Client von {addr} sendet Aktion '{action}'. Player_id im Handler: {player_id}. Spieler in game_data: {game_data.get('players', {}).get(player_id)}. Verbindung wird getrennt.")
                             error_payload_unauth = {
-                                "type":"game_update", # Als game_update senden
-                                "player_id": None, # Wichtig: Signalisiert dem Client, dass er keinen gültigen Spieler hat
+                                "type":"game_update", 
+                                "player_id": None, 
                                 "message":"Nicht authentifiziert oder aus Spiel entfernt. Bitte neu beitreten.",
                                 "join_error": "Sitzung ungültig oder abgelaufen. Bitte neu beitreten.",
                                 "game_state": {"status": "disconnected", "status_display": "Sitzung ungültig."}
                             }
-                            _safe_send_json(conn, error_payload_unauth, "N/A_UNAUTH", "N/A_UNAUTH")
-                            return # Beendet den Handler-Thread für diesen nicht-authentifizierten Client
+                            _safe_send_json(conn, error_payload_unauth, player_id or "N/A_UNAUTH_NO_PID", player_name_for_log)
+                            print(f"SERVER HANDLER ({addr}): Unauthentifiziert, Handler-Thread wird beendet.")
+                            return 
 
-                        # Ab hier sind alle Aktionen von einem authentifizierten Spieler (player_id ist gültig)
                         current_player_data = game_data["players"][player_id]
-                        current_player_data["last_seen"] = time.time() # Aktualisiere "zuletzt gesehen"
-                        # Sicherstellen, dass die client_conn des Spielers auf die aktuelle Verbindung zeigt (relevant bei Rejoin)
+                        current_player_data["last_seen"] = time.time() 
                         if current_player_data.get("client_conn") != conn:
+                            print(f"SERVER HANDLER ({addr}, P:{player_id}): Conn-Mismatch! Spieler-Conn: {current_player_data.get('client_conn')}, Handler-Conn: {conn}. Korrigiere...")
                             current_player_data["client_conn"] = conn
-                        player_name_for_log = current_player_data.get("name", "N/A") # Sicherstellen, dass der Name aktuell ist
+                        player_name_for_log = current_player_data.get("name", "N/A_Name_Missing_After_Auth")
 
 
-                        # --- AKTION: SET_READY ---
                         if action == "SET_READY":
-                            # Nur bestätigte Spieler in der Lobby können sich bereit melden
                             if current_game_status_in_handler == GAME_STATE_LOBBY and current_player_data.get("confirmed_for_lobby"):
                                 current_player_data["is_ready"] = message.get("ready_status") == True
                                 print(f"SERVER ACTION: P:{player_id} ({player_name_for_log}) gesetzt auf is_ready={current_player_data['is_ready']}.")
@@ -754,7 +726,6 @@ def handle_client_connection(conn, addr):
                                 print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) SET_READY in falschem Status/Konf. ({current_game_status_in_handler}, confirmed={current_player_data.get('confirmed_for_lobby')}).")
                                 send_data_to_one_client(conn, player_id)
 
-                        # --- AKTION: UPDATE_LOCATION ---
                         elif action == "UPDATE_LOCATION":
                             lat, lon = message.get("lat"), message.get("lon")
                             accuracy = message.get("accuracy")
@@ -762,16 +733,13 @@ def handle_client_connection(conn, addr):
                                 current_player_data["location"] = [lat, lon, accuracy]
                                 current_player_data["last_location_timestamp"] = time.time()
                                 if current_player_data.get("has_pending_location_warning"):
-                                    # Nur updaten, wenn die Warnung gesendet wurde und die aktuelle Zeit danach liegt
                                     if time.time() > current_player_data.get("warning_sent_time", 0):
                                          current_player_data["last_location_update_after_warning"] = time.time()
-                                # Standortupdates gehen nicht sofort an alle, nur an den eigenen Client.
                                 send_data_to_one_client(conn, player_id)
                             else:
                                 print(f"SERVER WARN: Ungültige Standortdaten von P:{player_id} ({player_name_for_log}): lat={lat}, lon={lon}")
                                 _safe_send_json(conn, {"type":"error", "message":"Ungültige Standortdaten empfangen."}, player_id, player_name_for_log)
 
-                        # --- AKTION: TASK_COMPLETE ---
                         elif action == "TASK_COMPLETE":
                             status_changed = False
                             if current_player_data["current_role"] == "hider" and \
@@ -792,10 +760,9 @@ def handle_client_connection(conn, addr):
                                 if check_game_conditions_and_end(): pass
                                 broadcast_full_game_state_to_all()
                             else:
-                                print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) TASK_COMPLETE nicht möglich (kein Hider, nicht aktiv, keine Aufgabe).")
+                                print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) TASK_COMPLETE nicht möglich.")
                                 send_data_to_one_client(conn, player_id)
 
-                        # NEU: AKTION: TASK_COMPLETE_OFFLINE
                         elif action == "TASK_COMPLETE_OFFLINE":
                             task_id_offline = message.get("task_id")
                             completed_at_offline_ts = message.get("completed_at_timestamp_offline")
@@ -804,7 +771,7 @@ def handle_client_connection(conn, addr):
                             if not task_id_offline or not isinstance(completed_at_offline_ts, (int, float)):
                                 err_msg_to_client = "Ungültige Daten für Offline-Aufgabenerledigung."
                             elif current_player_data.get("current_role") == "hider" and \
-                                 current_player_data.get("status_ingame") not in ["caught", "failed_task", "failed_loc_update"]: # Darf nicht schon ausgeschieden sein
+                                 current_player_data.get("status_ingame") not in ["caught", "failed_task", "failed_loc_update"]: 
                                 
                                 server_task_info = current_player_data.get("task")
                                 server_task_deadline = current_player_data.get("task_deadline")
@@ -823,13 +790,11 @@ def handle_client_connection(conn, addr):
                                         status_changed_offline = True
                                     else:
                                         err_msg_to_client = f"Offline erledigte Aufgabe (ID: {task_id_offline}) war laut Server-Deadline bereits zum Offline-Zeitpunkt abgelaufen."
-                                        # Aufgabe trotzdem entfernen, neue zuweisen, da Client sie als erledigt sah
                                         current_player_data["task"], current_player_data["task_deadline"] = None, None
                                         assign_task_to_hider(player_id) 
                                         status_changed_offline = True
-                                else: # Task-ID der Offline-Meldung passt nicht zur aktuellen Server-Aufgabe
-                                    err_msg_to_client = f"Gemeldete Offline-Aufgabe (ID: {task_id_offline}) ist nicht (mehr) deine aktuelle Server-Aufgabe. Evtl. zwischenzeitlich geändert/verfallen."
-                                    # Keine Punkte, da die Aufgabe nicht übereinstimmt. Der Spieler erhält durch den Broadcast die korrekte aktuelle Aufgabe.
+                                else: 
+                                    err_msg_to_client = f"Gemeldete Offline-Aufgabe (ID: {task_id_offline}) ist nicht (mehr) deine aktuelle Server-Aufgabe."
                             else:
                                 err_msg_to_client = "Offline-Aufgabe kann nicht angerechnet werden (falsche Rolle oder Spielerstatus)."
 
@@ -839,10 +804,9 @@ def handle_client_connection(conn, addr):
                             if status_changed_offline:
                                 if check_game_conditions_and_end(): pass
                                 broadcast_full_game_state_to_all()
-                            else: # Auch wenn nichts fundamental geändert wurde, Client-spezifische Nachricht könnte gesendet worden sein
+                            else: 
                                 send_data_to_one_client(conn, player_id)
 
-                        # --- AKTION: SKIP_TASK ---
                         elif action == "SKIP_TASK":
                             task_skipped_successfully = False; error_message_to_client = None
                             ack_message_to_client = None
@@ -858,7 +822,7 @@ def handle_client_connection(conn, addr):
                                         broadcast_server_text_notification(f"Hider {player_name_for_log} hat eine Aufgabe übersprungen.")
                                     else: error_message_to_client = "Keine Aufgaben-Skips mehr verfügbar."
                                 else: error_message_to_client = "Du hast keine aktive Aufgabe zum Überspringen."
-                            else: error_message_to_client = "Aufgabe kann derzeit nicht übersprungen werden (falsche Rolle/Status)."
+                            else: error_message_to_client = "Aufgabe kann derzeit nicht übersprungen werden."
 
                             if error_message_to_client:
                                 _safe_send_json(conn, {"type": "error", "message": error_message_to_client}, player_id, player_name_for_log)
@@ -869,92 +833,79 @@ def handle_client_connection(conn, addr):
                                 if check_game_conditions_and_end(): pass
                                 broadcast_full_game_state_to_all()
                             else:
-                                send_data_to_one_client(conn,player_id) # Update an Client, um Fehlermeldung anzuzeigen
+                                send_data_to_one_client(conn,player_id) 
 
-                        # --- AKTION: CATCH_HIDER ---
                         elif action == "CATCH_HIDER":
                             hider_id_to_catch = message.get("hider_id_to_catch"); caught = False
                             if current_player_data["current_role"] == "seeker" and \
                                current_game_status_in_handler == GAME_STATE_RUNNING and \
                                hider_id_to_catch in game_data.get("players", {}):
                                 hider_player_data = game_data["players"][hider_id_to_catch]
-                                # Hider muss aktiv sein und darf nicht offline sein (da Fangen nur In-Person geht)
                                 if hider_player_data.get("current_role") == "hider" and hider_player_data.get("status_ingame") == "active":
                                     hider_player_data["current_role"] = "seeker"; hider_player_data["status_ingame"] = "caught"
                                     hider_player_data["task"], hider_player_data["task_deadline"] = None, None
-                                    hider_player_data["task_skips_available"] = 0 # Gefangene Hider können keine Skips mehr nutzen
+                                    hider_player_data["task_skips_available"] = 0 
                                     broadcast_server_text_notification(f"Seeker {player_name_for_log} hat Hider {hider_player_data.get('name','N/A')} gefangen!")
                                     print(f"SERVER ACTION: Seeker {player_name_for_log} ({player_id}) hat Hider {hider_player_data.get('name','N/A')} ({hider_id_to_catch}) gefangen.")
                                     caught = True
                                 else:
-                                    _safe_send_json(conn, {"type":"error", "message":f"Hider {hider_player_data.get('name','N/A')} kann nicht gefangen werden (falsche Rolle/Status oder Offline)."}, player_id, player_name_for_log)
+                                    _safe_send_json(conn, {"type":"error", "message":f"Hider {hider_player_data.get('name','N/A')} kann nicht gefangen werden."}, player_id, player_name_for_log)
                             else:
-                                _safe_send_json(conn, {"type":"error", "message":f"Aktion 'Fangen' nicht möglich (falsche Rolle/Status oder Hider nicht gefunden)."}, player_id, player_name_for_log)
+                                _safe_send_json(conn, {"type":"error", "message":f"Aktion 'Fangen' nicht möglich."}, player_id, player_name_for_log)
 
                             if caught:
                                 if check_game_conditions_and_end(): pass
                                 broadcast_full_game_state_to_all()
                             else:
-                                send_data_to_one_client(conn, player_id) # Update an Client, falls nichts geändert wurde oder Fehler
+                                send_data_to_one_client(conn, player_id) 
 
-                        # --- AKTION: RETURN_TO_REGISTRATION ---
-                        # NEUE AKTION
                         elif action == "RETURN_TO_REGISTRATION":
-                            # Diese Aktion ist nur in der Lobby sinnvoll
                             if current_game_status_in_handler == GAME_STATE_LOBBY and player_id in game_data.get("players", {}):
                                 print(f"SERVER ACTION: Spieler {player_name_for_log} ({player_id}) kehrt zur Registrierung zurück.")
+                                player_id_to_remove = player_id # Speichere ID bevor sie None wird
 
-                                # 1. Spieler aus der globalen Spielerliste entfernen
-                                del game_data["players"][player_id]
+                                del game_data["players"][player_id_to_remove]
 
-                                # 2. Dem Client eine Update-Nachricht senden, die ihm mitteilt, dass seine player_id ungültig ist.
-                                #    Dies zwingt die UI, das Registrierungsformular anzuzeigen.
                                 reset_payload = {
-                                    "type": "game_update",
-                                    "player_id": None, # Das ist der Schlüssel!
-                                    "join_error": None, # Kein Fehler, nur ein Reset
+                                    "type": "game_update", "player_id": None, 
+                                    "join_error": None, 
                                     "game_message": "Bitte gib deine Details erneut ein.",
-                                    # Der Client soll den zuletzt verwendeten Namen aus seiner Session holen.
-                                    # Wir setzen confirmed_for_lobby nicht, da player_id=None ausreicht.
                                 }
-                                _safe_send_json(conn, reset_payload, player_id, player_name_for_log)
+                                _safe_send_json(conn, reset_payload, player_id_to_remove, player_name_for_log)
 
-                                # 3. WICHTIG: Die player_id für diesen Handler zurücksetzen.
-                                #    Der Handler ist jetzt wieder "unauthentifiziert" und wartet auf eine neue JOIN_GAME Nachricht.
                                 player_id = None
-                                player_name_for_log = "Unbekannt_Nach_Reset"
-
-                                # 4. Alle anderen Spieler über die Änderung im Lobby-Status informieren
+                                player_name_for_log = "Unbekannt_Nach_ReturnToReg"
+                                print(f"SERVER ACTION: Spieler {player_id_to_remove} entfernt, Handler ist jetzt unauthentifiziert.")
                                 broadcast_full_game_state_to_all()
                             else:
-                                # Aktion außerhalb der Lobby nicht erlaubt. Sende einfach den aktuellen Zustand.
                                 send_data_to_one_client(conn, player_id)
 
-                        # --- AKTION: LEAVE_GAME_AND_GO_TO_JOIN ---
                         elif action == "LEAVE_GAME_AND_GO_TO_JOIN":
                             print(f"SERVER LEAVE: Spieler {player_name_for_log} ({player_id}) verlässt das Spiel.")
-                            if player_id in game_data.get("players", {}):
-                                # Setze status_ingame auf "failed_loc_update" (oder einen ähnlichen "ausgeschieden" Status),
-                                # da der Spieler aktiv das Spiel verlässt.
-                                # Dies unterscheidet es vom "offline"-Status.
-                                if game_data["players"][player_id].get("status_ingame") == "active":
-                                     game_data["players"][player_id]["status_ingame"] = "failed_loc_update" # Als "verlassen" markieren
-                                     game_data["players"][player_id]["current_role"] = "seeker" # Ist jetzt auch Seeker
-                                     game_data["players"][player_id]["task"] = None
-                                     game_data["players"][player_id]["task_deadline"] = None
-                                     game_data["players"][player_id]["task_skips_available"] = 0
-                                     game_data["players"][player_id].pop("status_before_offline", None) # Wenn er active war, hat er keinen "before_offline" status mehr
+                            player_id_leaving = player_id # ID sichern
+                            
+                            if player_id_leaving in game_data.get("players", {}):
+                                if game_data["players"][player_id_leaving].get("status_ingame") == "active":
+                                     game_data["players"][player_id_leaving]["status_ingame"] = "failed_loc_update" 
+                                     game_data["players"][player_id_leaving]["current_role"] = "seeker" 
+                                     game_data["players"][player_id_leaving]["task"] = None
+                                     game_data["players"][player_id_leaving]["task_deadline"] = None
+                                     game_data["players"][player_id_leaving]["task_skips_available"] = 0
+                                     game_data["players"][player_id_leaving].pop("status_before_offline", None) 
                                      broadcast_server_text_notification(f"Spieler {player_name_for_log} hat das Spiel vorzeitig verlassen.")
-                                # Da der Client sich selbst auf None setzt, entfernen wir den Spieler aus game_data
-                                # nicht hier, sondern lassen das durch die Lobby-Rückkehr passieren.
-                                # Wichtig ist nur, dass der Status des verlassenden Spielers für andere sichtbar ist.
+                            
+                            _safe_send_json(conn, {"type": "acknowledgement", "message": "Du hast das Spiel verlassen."}, player_id_leaving, player_name_for_log)
+                            player_id = None # Wichtig: Handler-interne player_id auf None setzen
+                            player_name_for_log = "Unbekannt_Nach_LeaveGame"
+                            print(f"SERVER LEAVE: Spieler {player_id_leaving} als verlassen markiert, Handler ist jetzt unauthentifiziert.")
+                            
+                            # Prüfen ob Spiel endet und alle informieren
+                            if check_game_conditions_and_end(): pass
+                            broadcast_full_game_state_to_all() 
+                            # Nicht return, der finally-Block wird die Verbindung dieses Handlers schließen.
+                            # Der Client wird selbstständig seine Verbindung trennen.
+                            # Dieser Handler wird dann im finally-Block normal beendet.
 
-                            _safe_send_json(conn, {"type": "acknowledgement", "message": "Du hast das Spiel verlassen."}, player_id, player_name_for_log)
-                            player_id = None # Wichtig: Spieler-ID von DIESEM Handler entfernen, damit der finally Block ihn nicht als "offline" markiert
-                            broadcast_full_game_state_to_all() # Andere Spieler informieren über den Abgang
-                            return # Beendet den Handler-Thread für diesen Spieler
-
-                        # --- AKTION: REQUEST_EARLY_ROUND_END ---
                         elif action == "REQUEST_EARLY_ROUND_END":
                             if current_game_status_in_handler in [GAME_STATE_RUNNING, GAME_STATE_HIDER_WAIT] and \
                                current_player_data.get("status_ingame") == "active" and \
@@ -965,108 +916,113 @@ def handle_client_connection(conn, addr):
 
                                 if game_data["total_active_players_for_early_end"] > 0 and \
                                    len(game_data["early_end_requests"]) >= game_data["total_active_players_for_early_end"]:
-                                    # Alle aktiven Spieler haben abgestimmt -> Spiel vorzeitig beenden
-                                    game_data["status"] = GAME_STATE_SEEKER_WINS # Standardmäßig gewinnen Seeker bei Konsens-Ende
+                                    game_data["status"] = GAME_STATE_SEEKER_WINS 
                                     game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_SEEKER_WINS]
                                     game_data["game_over_message"] = f"Spiel durch Konsens vorzeitig beendet (während {GAME_STATE_DISPLAY_NAMES.get(current_game_status_in_handler, current_game_status_in_handler)}). Seeker gewinnen!"
                                     game_data["early_end_requests"].clear()
-                                    print(f"SERVER LOGIC: Spiel vorzeitig beendet durch Konsens ({len(game_data['early_end_requests'])}/{game_data['total_active_players_for_early_end']}).")
+                                    print(f"SERVER LOGIC: Spiel vorzeitig beendet durch Konsens.")
                                 broadcast_full_game_state_to_all()
                             else:
-                                print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) REQUEST_EARLY_ROUND_END in falschem Status/Konf. ({current_game_status_in_handler}, active={current_player_data.get('status_ingame')}).")
-                                send_data_to_one_client(conn, player_id) # Update an Client, falls nichts geändert wurde
+                                print(f"SERVER ACTION DENIED: P:{player_id} ({player_name_for_log}) REQUEST_EARLY_ROUND_END in falschem Status/Konf.")
+                                send_data_to_one_client(conn, player_id) 
 
-                        # --- Unbekannte Aktion ---
                         else:
                             print(f"SERVER WARN: Unbekannte/unerwartete Aktion '{action}' von P:{player_id} ({player_name_for_log}) empfangen.")
                             _safe_send_json(conn, {"type":"error", "message": f"Aktion '{action}' unbekannt oder derzeit nicht erlaubt."}, player_id, player_name_for_log)
 
             except json.JSONDecodeError:
                 print(f"SERVER JSON DECODE ERROR ({addr}, P:{player_id}, Name:{player_name_for_log}): Buffer war '{buffer[:200]}...'")
-                _safe_send_json(conn, {"type":"error", "message":"Fehlerhafte JSON-Daten empfangen. Verbindung könnte instabil sein."}, player_id, player_name_for_log)
-                buffer = "" # Puffer löschen, um Endlosschleife bei korrupten Daten zu vermeiden
+                _safe_send_json(conn, {"type":"error", "message":"Fehlerhafte JSON-Daten empfangen."}, player_id, player_name_for_log)
+                buffer = "" 
             except (ConnectionResetError, BrokenPipeError, OSError) as e_comm_loop:
                 print(f"SERVER COMM ERROR in handler loop ({addr}, P:{player_id}, Name:{player_name_for_log}). Aktion: {action_for_log}. Fehler: {e_comm_loop}")
-                break # Verlasse die innere while True Schleife -> geht zum finally
+                break 
             except Exception as e_inner_loop:
                 print(f"SERVER UNEXPECTED INNER LOOP ERROR ({addr}, P:{player_id}, Name:{player_name_for_log}). Aktion: {action_for_log}. Fehler: {e_inner_loop}"); traceback.print_exc()
                 _safe_send_json(conn, {"type":"error", "message":"Interner Serverfehler bei Nachrichtenverarbeitung."}, player_id, player_name_for_log)
-                # Hier nicht breaken, vielleicht erholt sich der Handler.
 
     except Exception as e_outer_handler:
         print(f"SERVER UNEXPECTED HANDLER ERROR ({addr}, P:{player_id}, Name:{player_name_for_log}). Fehler: {e_outer_handler}"); traceback.print_exc()
     finally:
-        # Dieser finally-Block wird ausgeführt, wenn der Handler-Thread endet (break, return, Exception).
-        # Hier muss der Server-Zustand für den Spieler, der diese Verbindung hatte, aktualisiert werden.
-        print(f"SERVER CLEANUP ({addr}, P:{player_id}, Name: {player_name_for_log}). Verbindung wird clientseitig geschlossen oder ist bereits verloren.")
+        print(f"SERVER CLEANUP ENTERED ({addr}, P:{player_id}, Name: {player_name_for_log}).")
         player_affected_by_disconnect = False
-        player_rejoined_meanwhile = False # NEU: Flag, um zu erkennen, ob Spieler bereits rejoined ist
+        player_rejoined_meanwhile = False
+        player_name_at_disconnect = player_name_for_log # Sicherstellen, dass wir den Namen haben
+        player_id_at_disconnect = player_id # Sicherstellen, dass wir die ID haben
+
         with data_lock:
-            if player_id and player_id in game_data.get("players", {}):
-                player_entry = game_data["players"][player_id]
-                # Wichtig: Nur client_conn auf None setzen, wenn die Verbindung DIESES Handlers
-                # noch die des Spielers ist. Dies ist entscheidend für Reconnects/Rejoins.
-                # Wenn der Spieler bereits erfolgreich rejoined ist, dann zeigt client_conn auf die neue Verbindung.
-                if player_entry.get("client_conn") == conn: # Wenn der alte Handler noch die Verbindung hält
+            if player_id_at_disconnect and player_id_at_disconnect in game_data.get("players", {}):
+                player_entry = game_data["players"][player_id_at_disconnect]
+                player_name_at_disconnect = player_entry.get("name", player_name_at_disconnect) # Ggf. aktuelleren Namen holen
+                print(f"SERVER CLEANUP ({addr}, P:{player_id_at_disconnect}, Name:{player_name_at_disconnect}): Spieler in game_data gefunden. Aktuelle conn des Spielers: {player_entry.get('client_conn')}, Handler conn: {conn}")
+                if player_entry.get("client_conn") == conn: 
                     player_entry["client_conn"] = None
-                    # Markiere Spieler als "offline", wenn er nicht schon in einem finalen Zustand ist
                     if player_entry.get("status_ingame") not in ["offline", "caught", "failed_task", "failed_loc_update"]:
                         player_entry["status_before_offline"] = player_entry.get("status_ingame", "active")
                         player_entry["status_ingame"] = "offline"
                         player_affected_by_disconnect = True
-                        print(f"SERVER DISCONNECT: Spieler {player_name_for_log} ({player_id}) Status auf 'offline' gesetzt.")
-                    else: # Spieler war bereits offline oder im Endstatus, kein Broadcast nötig
-                        print(f"SERVER DISCONNECT: P:{player_id} ({player_name_for_log}) war bereits in End-Status oder offline. Keine Statusänderung.")
+                        print(f"SERVER DISCONNECT: Spieler {player_name_at_disconnect} ({player_id_at_disconnect}) Status auf 'offline' gesetzt.")
+                    else: 
+                        print(f"SERVER DISCONNECT: P:{player_id_at_disconnect} ({player_name_at_disconnect}) war bereits in End-Status oder offline. Keine Statusänderung.")
                 else:
-                    # Die client_conn des Spielers zeigt auf eine andere Verbindung, d.h. der Spieler hat erfolgreich rejoined.
                     player_rejoined_meanwhile = True
-                    print(f"SERVER DISCONNECT: P:{player_id} ({player_name_for_log}) hat sich bereits mit neuer Verbindung verbunden. Alte Handler-Verbindung wird geschlossen.")
+                    print(f"SERVER DISCONNECT: P:{player_id_at_disconnect} ({player_name_at_disconnect}) hat sich bereits mit neuer Verbindung ({player_entry.get('client_conn')}) verbunden. Alte Handler-Verbindung wird nur geschlossen.")
+            elif player_id_at_disconnect: # Hatte eine ID, aber nicht mehr in game_data (z.B. durch Reset)
+                 print(f"SERVER CLEANUP ({addr}, P:{player_id_at_disconnect}, Name:{player_name_at_disconnect}): Spieler-ID bekannt, aber Spieler NICHT MEHR in game_data (z.B. nach Server-Reset).")
+            else: # player_id war None (z.B. Join nie erfolgt oder RETURN_TO_REGISTRATION)
+                 print(f"SERVER CLEANUP ({addr}): Keine Spieler-ID für diesen Handler gesetzt (z.B. Join nie erfolgt, nach RETURN_TO_REGISTRATION oder LEAVE_GAME).")
 
-        if player_affected_by_disconnect: # Nur broadcasten, wenn ein aktiver Spieler die Verbindung verloren hat
-            if game_data.get("status") == GAME_STATE_RUNNING:
-                if check_game_conditions_and_end(): pass # Prüfen, ob das Spiel durch den Disconnect endet
-            broadcast_full_game_state_to_all() # Informiere andere über den (impliziten) Disconnect
-            broadcast_server_text_notification(f"Spieler {player_name_for_log} ist offline gegangen.")
+        # Broadcast und Spielzustandsprüfung nur, wenn ein "aktiver" Spieler die Verbindung verloren hat
+        # UND er nicht inzwischen rejoined ist.
+        if player_affected_by_disconnect and not player_rejoined_meanwhile: 
+            current_status_temp = None
+            with data_lock: current_status_temp = game_data.get("status") # Status unter Lock holen
+            
+            if current_status_temp == GAME_STATE_RUNNING:
+                if check_game_conditions_and_end(): pass 
+            broadcast_full_game_state_to_all() 
+            broadcast_server_text_notification(f"Spieler {player_name_at_disconnect} ist offline gegangen.")
         elif player_rejoined_meanwhile:
-            # Hier ist kein Broadcast nötig, da der Rejoin-Prozess bereits einen ausgelöst hat.
+            print(f"SERVER CLEANUP ({addr}, P:{player_id_at_disconnect}): Kein Broadcast, da Spieler bereits rejoined.")
             pass
 
-        if conn: # Schließe die Socket-Verbindung dieses Handlers, falls noch offen.
-            try: conn.close()
+        if conn: 
+            try:
+                print(f"SERVER CLEANUP ({addr}, P:{player_id_at_disconnect}, Name:{player_name_at_disconnect}): Schließe Socket dieses Handlers ({conn}).") 
+                conn.close()
             except Exception as e_close:
                 print(f"SERVER CLEANUP: Fehler beim Schließen des Sockets für {addr}: {e_close}")
+        print(f"SERVER CLEANUP EXIT ({addr}, P:{player_id_at_disconnect}, Name:{player_name_at_disconnect}). Handler-Thread beendet.")
+
 
 def game_logic_thread():
     previous_game_status_for_logic = None
     while True:
-        try: # Hinzugefügter try-Block für Robustheit des gesamten Threads
-            time.sleep(1) # Haupt-Tick-Rate des Spiels
+        try: 
+            time.sleep(1) 
             game_ended_this_tick = False
             broadcast_needed_due_to_time_or_state_change = False
 
             with data_lock:
                 current_time = time.time()
                 current_game_status = game_data.get("status")
-                if current_game_status is None: # Sollte nicht passieren, aber als Fallback
+                if current_game_status is None: 
                     print("SERVER LOGIC (ERROR): Game status is None. Resetting game to initial state.")
                     reset_game_to_initial_state(); current_game_status = game_data.get("status")
 
-                # Prüfe auf Phasenwechsel und aktualisiere Broadcast-Bedürfnis
                 if previous_game_status_for_logic != current_game_status:
                     broadcast_needed_due_to_time_or_state_change = True
                     print(f"SERVER LOGIC: Game status changed from {previous_game_status_for_logic} to {current_game_status}.")
                     previous_game_status_for_logic = current_game_status
                     if current_game_status in [GAME_STATE_RUNNING, GAME_STATE_HIDER_WAIT]:
-                        game_data["early_end_requests"] = set() # Reset bei Phasenwechsel
+                        game_data["early_end_requests"] = set() 
                         game_data["total_active_players_for_early_end"] = count_active_players_for_early_end()
 
-                # --- Game State Logic ---
                 if current_game_status == GAME_STATE_LOBBY:
                     active_lobby_player_count = 0; all_in_active_lobby_ready = True
                     current_players_in_lobby = game_data.get("players", {})
                     if not current_players_in_lobby: all_in_active_lobby_ready = False
                     else:
-                        # Nur verbundene und bestätigte Spieler zählen als "bereit" für den Start
                         confirmed_players_for_lobby = [p for p in current_players_in_lobby.values()
                                                        if p.get("confirmed_for_lobby") and p.get("client_conn") is not None]
                         if not confirmed_players_for_lobby:
@@ -1077,7 +1033,7 @@ def game_logic_thread():
                                 if not p_info_check.get("is_ready", False):
                                     all_in_active_lobby_ready = False; break
 
-                    MIN_PLAYERS_TO_START = 1
+                    MIN_PLAYERS_TO_START = 1 # Mindestens 1 Spieler zum Starten (kann angepasst werden)
                     if all_in_active_lobby_ready and active_lobby_player_count >= MIN_PLAYERS_TO_START:
                         game_data["status"] = GAME_STATE_HIDER_WAIT
                         game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_HIDER_WAIT]
@@ -1093,18 +1049,15 @@ def game_logic_thread():
                         game_data["game_end_time"] = current_time + GAME_DURATION_SECONDS
                         print(f"SERVER LOGIC: Wechsel zu RUNNING. Spielende: {time.strftime('%H:%M:%S', time.localtime(game_data['game_end_time']))}")
 
-                        # Setze initiale Phase und ersten Broadcast
                         game_data["current_phase_index"] = 0
                         game_data["current_phase_start_time"] = current_time
                         game_data["updates_done_in_current_phase"] = 0
-                        _calculate_and_set_next_broadcast_time(current_time) # Plant den ersten Reveal
+                        _calculate_and_set_next_broadcast_time(current_time) 
 
-                        # Weisen Hidern Aufgaben zu
                         for p_id_task, p_info_task in list(game_data.get("players", {}).items()):
                             if p_info_task.get("current_role") == "hider" and p_info_task.get("confirmed_for_lobby") and p_info_task.get("status_ingame") == "active":
                                 assign_task_to_hider(p_id_task)
 
-                        # Sende Game-Event "game_started" an alle Clients
                         event_payload_gs = {"type": "game_event", "event_name": "game_started"}
                         player_list_copy_gs = list(game_data.get("players", {}).items())
                         for p_id_event, p_info_event in player_list_copy_gs:
@@ -1113,26 +1066,24 @@ def game_logic_thread():
 
                         broadcast_needed_due_to_time_or_state_change = True
 
-                    elif int(game_data["hider_wait_end_time"] - current_time) % 3 == 0:
-                        broadcast_needed_due_to_time_or_state_change = True # Regelmäßige Updates
+                    elif int(game_data.get("hider_wait_end_time",0) - current_time) % 3 == 0 : # Hinzugefügt, um sicherzustellen, dass hider_wait_end_time existiert
+                        broadcast_needed_due_to_time_or_state_change = True 
 
                 elif current_game_status == GAME_STATE_RUNNING:
-                    # Prüfe auf Spielende (Seeker- oder Hider-Sieg)
                     if check_game_conditions_and_end():
                         game_ended_this_tick = True
                     else:
-                        # Logik für Hider-Standort-Updates
                         next_b_time = game_data.get("next_location_broadcast_time", float('inf'))
                         warning_time_trigger = next_b_time - HIDER_WARNING_BEFORE_SEEKER_UPDATE_SECONDS
 
-                        # Sende Warnung an Hider
                         current_phase_idx_for_warn = game_data.get("current_phase_index", -1)
                         allow_warning = True
                         if 0 <= current_phase_idx_for_warn < len(PHASE_DEFINITIONS):
                             phase_def_warn = PHASE_DEFINITIONS[current_phase_idx_for_warn]
-                            # Vermeide Warnung, wenn Update-Interval zu kurz ist
-                            interval_check = phase_def_warn.get("update_interval_seconds", phase_def_warn.get("duration_seconds", 1000) / phase_def_warn.get("updates_in_phase",1) if phase_def_warn.get("updates_in_phase",0)>0 else 1000)
-                            if interval_check < HIDER_WARNING_BEFORE_SEEKER_UPDATE_SECONDS + 5: # 5s Puffer
+                            interval_check = phase_def_warn.get("update_interval_seconds", 
+                                                                (phase_def_warn.get("duration_seconds", 1000) / phase_def_warn.get("updates_in_phase",1)) 
+                                                                if phase_def_warn.get("updates_in_phase",0)>0 else 1000)
+                            if interval_check < HIDER_WARNING_BEFORE_SEEKER_UPDATE_SECONDS + 5: 
                                 allow_warning = False
 
                         if allow_warning and \
@@ -1146,40 +1097,32 @@ def game_logic_thread():
                             player_list_copy_warn = list(game_data.get("players", {}).items())
                             for p_id, p_info in player_list_copy_warn:
                                 if p_id not in game_data.get("players",{}): continue
-                                # Warnung nur für aktive Hider, die auch online sind
                                 if p_info.get("current_role") == "hider" and p_info.get("status_ingame") == "active" and p_info.get("client_conn"):
                                     if not p_info.get("has_pending_location_warning"):
                                         game_data["players"][p_id]["has_pending_location_warning"] = True
                                         game_data["players"][p_id]["warning_sent_time"] = current_time
-                                        game_data["players"][p_id]["last_location_update_after_warning"] = 0 # Reset des Zeitpunkts der letzten Update nach Warnung
+                                        game_data["players"][p_id]["last_location_update_after_warning"] = 0 
                                         hiders_needing_warning_update = True
                                         conn_warn = p_info.get("client_conn")
                                         if conn_warn: _safe_send_json(conn_warn, event_payload_warn, p_id, p_info.get("name"))
                             if hiders_needing_warning_update: broadcast_needed_due_to_time_or_state_change = True
 
 
-                        # Führe Standort-Broadcast durch
                         if current_time >= next_b_time and next_b_time != float('inf'):
-                            game_data["hider_warning_active_for_current_cycle"] = False # Reset Warnung für nächsten Zyklus
+                            game_data["hider_warning_active_for_current_cycle"] = False 
                             active_hiders_who_failed_update_names = []
 
                             player_list_copy_bc = list(game_data.get("players", {}).items())
                             for p_id_h, p_info_h in player_list_copy_bc:
-                                if p_id_h not in game_data.get("players", {}): continue # Spieler könnte inzwischen entfernt worden sein
+                                if p_id_h not in game_data.get("players", {}): continue 
                                 if p_info_h.get("current_role") == "hider" and p_info_h.get("status_ingame") == "active":
-                                    # Wenn Hider offline ist, können wir nicht prüfen, ob er aktualisiert hat.
-                                    # Aber wenn er die Warnung erhalten hat und online war, prüfen wir.
                                     if p_info_h.get("has_pending_location_warning") and p_info_h.get("client_conn"):
-                                        # Wenn keine Standortaktualisierung nach der Warnung erfolgte oder vor der Warnung war
                                         if p_info_h.get("last_location_update_after_warning", 0) <= p_info_h.get("warning_sent_time", 0):
                                             active_hiders_who_failed_update_names.append(p_info_h.get('name', 'Unbekannt'))
-                                            # TODO: Bestrafung für nicht aktualisierte Standortdaten hier hinzufügen, falls gewünscht
-                                            # z.B. p_info_h["status_ingame"] = "failed_loc_update"
-                                    game_data["players"][p_id_h]["has_pending_location_warning"] = False # Warnung zurücksetzen
+                                    game_data["players"][p_id_h]["has_pending_location_warning"] = False 
 
                             if active_hiders_who_failed_update_names:
-                                 # Keine harte Strafe, nur Info an alle
-                                 broadcast_server_text_notification(f"Hider haben Standort nach Warnung NICHT aktualisiert: {', '.join(active_hiders_who_failed_update_names)}. Sie bleiben aktiv (keine Strafe).")
+                                 broadcast_server_text_notification(f"Hider haben Standort nach Warnung NICHT aktualisiert: {', '.join(active_hiders_who_failed_update_names)}. Sie bleiben aktiv.")
 
                             game_data["updates_done_in_current_phase"] += 1
                             print(f"SERVER LOGIC: Hider-Standort-Broadcast durchgeführt (Update {game_data['updates_done_in_current_phase']} in Phase {game_data.get('current_phase_index',0)}).")
@@ -1192,13 +1135,11 @@ def game_logic_thread():
                                     conn_seek_ev = p_info_s.get("client_conn")
                                     if conn_seek_ev: _safe_send_json(conn_seek_ev, event_payload_seeker, p_id_s, p_info_s.get("name"))
 
-                            _calculate_and_set_next_broadcast_time(current_time) # Planen des nächsten Broadcasts
+                            _calculate_and_set_next_broadcast_time(current_time) 
                             broadcast_needed_due_to_time_or_state_change = True
 
-                        # Sende regelmäßige Updates während RUNNING
                         if game_data.get("game_end_time") and int(game_data.get("game_end_time",0) - current_time) % 5 == 0 :
                             broadcast_needed_due_to_time_or_state_change = True
-                        # Und für Early-End-Vote-Zähler (alle 10s)
                         if int(current_time) % 10 == 0 :
                             new_active_count = count_active_players_for_early_end()
                             if game_data.get("total_active_players_for_early_end") != new_active_count:
@@ -1209,22 +1150,20 @@ def game_logic_thread():
                     if "actual_game_over_time" not in game_data or game_data["actual_game_over_time"] is None:
                         game_data["actual_game_over_time"] = current_time
                         if not game_data.get("game_end_time"):
-                             game_data["game_end_time"] = current_time # Setze es, falls es durch Early-End fehlte
+                             game_data["game_end_time"] = current_time 
 
                     if current_time >= game_data["actual_game_over_time"] + POST_GAME_LOBBY_RETURN_DELAY_SECONDS:
                         print("SERVER LOGIC: Game over screen timeout. Transitioning to new lobby.")
 
-                        # --- KORRIGIERTE SOFT-RESET LOGIK ---
                         players_to_keep = {}
                         players_copy_reset = list(game_data.get("players", {}).items())
                         
                         for p_id, p_info in players_copy_reset:
-                            # Behalte nur Spieler, die noch eine aktive Verbindung haben.
                             if p_info.get("client_conn") is not None:
                                 original_role = p_info.get("original_role", "hider")
                                 p_info.update({
                                     "is_waiting_for_lobby": False,
-                                    "confirmed_for_lobby": True, # Sie sind jetzt bestätigt für die neue Lobby
+                                    "confirmed_for_lobby": True, 
                                     "is_ready": False,
                                     "current_role": original_role,
                                     "points": 0, "task": None, "task_deadline": None,
@@ -1238,10 +1177,8 @@ def game_logic_thread():
                             else:
                                 print(f"SERVER SOFT-RESET: Entferne Spieler {p_info.get('name')} ({p_id}), da keine Verbindung mehr besteht.")
                         
-                        # Ersetze die alte Spielerliste durch die bereinigte Liste
                         game_data["players"] = players_to_keep
 
-                        # Setze globalen Spielstatus auf Lobby
                         game_data["status"] = GAME_STATE_LOBBY
                         game_data["status_display"] = GAME_STATE_DISPLAY_NAMES[GAME_STATE_LOBBY]
                         game_data["game_start_time_actual"] = None; game_data["game_end_time"] = None
@@ -1253,36 +1190,33 @@ def game_logic_thread():
                         game_data.get("early_end_requests", set()).clear()
                         game_data["total_active_players_for_early_end"] = 0
                         game_data["actual_game_over_time"] = None
-                        game_data["available_tasks"] = list(TASKS) # Aufgaben neu laden
+                        game_data["available_tasks"] = list(TASKS) 
 
                         broadcast_needed_due_to_time_or_state_change = True
                         print("SERVER LOGIC: Alle verbliebenen Spieler in den neuen Lobby-Zustand überführt.")
-                    else: # Während Game-Over-Screen noch angezeigt wird
-                        # Sende weniger häufig Updates, aber genug, damit die UI den Countdown sieht
+                    else: 
                         time_since_actual_game_over = current_time - game_data.get("actual_game_over_time", current_time)
-                        if time_since_actual_game_over < 3: # Erste paar Sekunden häufiger
-                            if int(current_time * 2) % 2 == 0: # Jede halbe Sekunde
+                        if time_since_actual_game_over < 3: 
+                            if int(current_time * 2) % 2 == 0: 
                                 broadcast_needed_due_to_time_or_state_change = True
-                        elif int(current_time) % 5 == 0: # Dann alle 5 Sekunden
+                        elif int(current_time) % 5 == 0: 
                              broadcast_needed_due_to_time_or_state_change = True
 
-            # Globaler Broadcast, wenn sich etwas Wichtiges geändert hat
             if game_ended_this_tick or broadcast_needed_due_to_time_or_state_change:
                 broadcast_full_game_state_to_all()
 
-        except Exception as e: # Catch-all für den game_logic_thread
+        except Exception as e: 
             print(f"!!! CRITICAL ERROR IN GAME LOGIC THREAD !!!")
             print(f"Error: {e}")
             traceback.print_exc()
-            # Der Thread wird nun nicht mehr stillschweigend beendet, sondern loggt den Fehler.
-            # Man könnte hier zusätzlich ein automatisches Reset des Spiels oder andere Wiederherstellungslogik einbauen.
             print(f"Game logic thread wird versuchen, nach einer kurzen Pause fortzufahren.")
-            time.sleep(5) # Kurze Pause, um eine zu schnelle Fehler-Loop zu vermeiden
+            time.sleep(5) 
 
 def main_server():
-    reset_game_to_initial_state() # Initialisiere Spielzustand beim Serverstart
+    print("SERVER: Initialisiere Spielzustand beim Serverstart...")
+    reset_game_to_initial_state() 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # Port wiederverwendbar machen
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
     try:
         server_socket.bind((HOST, PORT))
     except OSError as e:
@@ -1290,22 +1224,23 @@ def main_server():
     server_socket.listen()
     print(f"Hide and Seek Server lauscht auf {HOST}:{PORT}")
 
-    # Starte den Game Logic Thread
     threading.Thread(target=game_logic_thread, daemon=True).start()
     print("SERVER: Game Logic Thread gestartet.")
 
     try:
         while True:
-            conn, addr = server_socket.accept() # Akzeptiere eingehende Verbindungen
+            print("SERVER MAIN LOOP: Warte auf neue Verbindung (accept)...")
+            conn, addr = server_socket.accept() 
+            print(f"SERVER MAIN LOOP: Verbindung von {addr} akzeptiert. Starte Handler-Thread.")
             thread = threading.Thread(target=handle_client_connection, args=(conn, addr), daemon=True)
-            thread.start() # Starte einen neuen Thread für jede Client-Verbindung
+            thread.start() 
     except KeyboardInterrupt:
         print("SERVER: KeyboardInterrupt. Fahre herunter.")
     except Exception as e:
         print(f"SERVER FATAL: Unerwarteter Fehler in Hauptschleife: {e}"); traceback.print_exc()
     finally:
         print("SERVER: Schließe Server-Socket...");
-        if server_socket: # Stelle sicher, dass der Socket existiert, bevor du schließt
+        if server_socket: 
             try: server_socket.close()
             except Exception as e: print(f"SERVER: Fehler beim Schließen des Hauptsockets: {e}")
         print("SERVER: Server beendet.")
