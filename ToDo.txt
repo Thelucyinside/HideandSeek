@@ -1,5 +1,7 @@
 HIDE AND SEEK TO DO
 Spiel:
+- Server jederzeit reseten
+- alte clients vermeiden: wenn 2 oder mehr unterschiedliche spieler üner die selbe ip laufen, haben sie auch fast immer das selbe internet. Wenn also für 1-2 minuten 1 spieler online ist, der andere aber nicht, wird der der Offline ist gekickt, und es wird der spieler mit dem besten Spielstand übernommen. in der lobby gild grundsätzlich das man online sein muss um beizutreten. Wenn man es nicht ist, wird man direkt aus derlite entefert, bis mn wieder online ist.
 - Nach ende der Runde direkt in Lobby ohne Neuanmeldung (am besten einfach server reset)
 - auch wärend dem spiel joinen.
 - eingaben auf website in datei cachen für schnellere eingabe (✓)
