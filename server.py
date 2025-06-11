@@ -93,43 +93,29 @@ def _safe_send_json(conn, payload, player_id_for_log="N/A", player_name_for_log=
 def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message="Server wurde zurückgesetzt. Bitte neu beitreten."):
     """ Setzt das Spiel komplett zurück, entfernt alle Spieler und startet eine frische Lobby. """
     global game_data
-    with data_lock:
+    
+    # --- Phase 1: Daten sammeln und game_data modifizieren (unter Lock) ---
+    players_to_notify_and_disconnect_info = [] # Lokale Liste für Infos außerhalb des Locks
+
+    with data_lock: # Sperre für den Zugriff auf game_data
         print(f"SERVER LOGIC: Spiel wird zurückgesetzt. Notify Clients: {notify_clients_about_reset}")
 
         if notify_clients_about_reset:
-            players_to_disconnect_info = []
-            # Erstelle eine Kopie der Spielerliste, da diese während der Iteration geändert werden könnte
+            # Erstelle eine Kopie der Spielerliste, um Informationen zu sammeln
             current_players_copy = list(game_data.get("players", {}).items())
 
             for p_id, p_info in current_players_copy:
                 conn_to_notify = p_info.get("client_conn")
                 p_name_log = p_info.get("name", "N/A")
                 if conn_to_notify:
-                    players_to_disconnect_info.append({
+                    # Speichere die notwendigen Infos für die spätere Benachrichtigung/Trennung
+                    players_to_notify_and_disconnect_info.append({
                         "id": p_id,
-                        "conn": conn_to_notify,
+                        "conn": conn_to_notify, # Wichtig: die Socket-Referenz speichern
                         "name": p_name_log
                     })
-                    payload = {
-                        "type": "game_update", # Als game_update senden, um Client-View zu resetten
-                        "player_id": None, # Signalisiert dem Client, dass er nicht mehr gültig ist
-                        "error_message": reset_message,
-                        "join_error": reset_message, # Wichtig für UI-Wechsel zum Join-Screen
-                        "game_state": { "status": "disconnected", "status_display": reset_message, "game_over_message": reset_message }
-                    }
-                    if _safe_send_json(conn_to_notify, payload, p_id, p_name_log):
-                         print(f"SERVER RESET NOTIFY: An P:{p_id} ({p_name_log}) gesendet.")
-                    else:
-                         print(f"SERVER RESET NOTIFY (SEND FAILED): P:{p_id} ({p_name_log}).")
-
-            # Schließe die Sockets der benachrichtigten Clients explizit
-            for player_info_dc in players_to_disconnect_info:
-                try:
-                    player_info_dc["conn"].close()
-                    print(f"SERVER RESET: Socket für P:{player_info_dc['id']} ({player_info_dc['name']}) explizit geschlossen.")
-                except Exception as e:
-                    print(f"SERVER RESET: Fehler beim Schließen des Sockets für P:{player_info_dc['id']}: {e}")
-
+        
+        # Jetzt game_data zurücksetzen, immer noch innerhalb des Locks
         game_data.clear() # Löscht alle alten Spiel- und Spielerdaten
         game_data.update({
             "status": GAME_STATE_LOBBY,
@@ -144,13 +130,58 @@ def reset_game_to_initial_state(notify_clients_about_reset=False, reset_message=
             "actual_game_over_time": None,
             "early_end_requests": set(),
             "total_active_players_for_early_end": 0,
-            "current_phase_index": -1, # Beginnt bei -1, wird beim Start von HIDER_WAIT zu 0 (Initial Reveal)
+            "current_phase_index": -1,
             "current_phase_start_time": 0,
             "updates_done_in_current_phase": 0,
             "next_location_broadcast_time": float('inf'),
         })
-        print("SERVER LOGIC: Spielzustand auf Initialwerte zurückgesetzt.")
+        print("SERVER LOGIC: Spielzustand auf Initialwerte zurückgesetzt (game_data manipuliert).")
+    # --- data_lock wird hier freigegeben ---
 
+    # --- Phase 2: Netzwerkoperationen (außerhalb des Locks) ---
+    if notify_clients_about_reset and players_to_notify_and_disconnect_info:
+        print(f"SERVER LOGIC: Beginne Benachrichtigung und Trennung von {len(players_to_notify_and_disconnect_info)} Clients (außerhalb des Locks).")
+        
+        payload_for_reset = { # Payload einmal erstellen, um Redundanz zu vermeiden
+            "type": "game_update", 
+            "player_id": None, 
+            "error_message": reset_message,
+            "join_error": reset_message, 
+            "game_state": { "status": "disconnected", "status_display": reset_message, "game_over_message": reset_message }
+        }
+
+        for player_info in players_to_notify_and_disconnect_info:
+            conn = player_info["conn"]
+            p_id = player_info["id"]
+            p_name = player_info["name"]
+            
+            # Sende Benachrichtigung
+            # _safe_send_json wird client_conn in game_data nicht mehr auf None setzen,
+            # da game_data bereits geleert wurde. Das ist OK für diesen Reset-Fall.
+            if _safe_send_json(conn, payload_for_reset, p_id, p_name):
+                print(f"SERVER RESET NOTIFY: An P:{p_id} ({p_name}) gesendet (außerhalb Lock).")
+            else:
+                print(f"SERVER RESET NOTIFY (SEND FAILED): P:{p_id} ({p_name}) (außerhalb Lock).")
+            
+            # Schließe die Verbindung explizit, da der Client ohnehin neu verbinden muss
+            try:
+                # Es ist sicherer, shutdown vor close aufzurufen, um dem anderen Ende mitzuteilen,
+                # dass keine weiteren Daten gesendet werden.
+                conn.shutdown(socket.SHUT_RDWR) 
+            except (OSError, socket.error) as e_shutdown:
+                # Ignoriere Fehler, wenn der Socket bereits geschlossen ist (z.B. "Socket is not connected")
+                if e_shutdown.errno not in [socket.EBADF, socket.ENOTCONN]: # EBADF: Bad file descriptor, ENOTCONN: Socket is not connected
+                    print(f"SERVER RESET: Fehler beim Socket-Shutdown für P:{p_id} ({p_name}): {e_shutdown} (außerhalb Lock).")
+            except Exception as e_shutdown_generic:
+                 print(f"SERVER RESET: Generischer Fehler beim Socket-Shutdown für P:{p_id} ({p_name}): {e_shutdown_generic} (außerhalb Lock).")
+            finally:
+                try:
+                    conn.close()
+                    print(f"SERVER RESET: Socket für P:{p_id} ({p_name}) explizit geschlossen (außerhalb Lock).")
+                except Exception as e_close:
+                    print(f"SERVER RESET: Fehler beim expliziten Schließen des Sockets für P:{p_id} ({p_name}): {e_close} (außerhalb Lock).")
+    
+    print("SERVER LOGIC: reset_game_to_initial_state abgeschlossen.")
 
 def get_active_lobby_players_data():
     active_lobby_players = {}
