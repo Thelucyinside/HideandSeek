@@ -143,9 +143,10 @@
         .dimmed { color: #777; }
         #server-management-container {
             margin-top: 30px;
-            padding: 10px;
-            border-top: 1px dashed #ccc;
-            text-align: center;
+            padding: 15px;
+            border-top: 2px dashed #ccc;
+            background-color: #f8f9fa; /* Leichter Hintergrund zur Abgrenzung */
+            border-radius: 8px;
         }
         #server-management-container p { font-size: 0.8em; color: #777; margin-bottom: 0; }
         #server-management-container button {
@@ -173,11 +174,7 @@
                 <button id="connect-to-server-button">Mit Server verbinden</button>
             </div>
 
-            <!-- Unauffälliger Server-Reset am Ende der Seite -->
-            <div id="server-management-container">
-                <button id="force-server-reset-button" class="danger-btn">Server für alle zurücksetzen (Notfall)</button>
-                <p>Achtung: Nutzt die oben eingegebene Adresse. Setzt das Spiel für alle Spieler auf eine neue Lobby zurück.</p>
-            </div>
+            <!-- DIESER BLOCK WURDE HIER ENTFERNT -->
         </div>
 
         <!-- Schritt 2: Lobby-Registrierung -->
@@ -306,6 +303,14 @@
              <p class="dimmed centered-text" style="margin-top:15px;">Du wirst in Kürze zur Lobby zurückgebracht...</p>
              <button id="leave-game-now-button" class="action-btn" onclick="handleLeaveAndGoToJoinScreen()">Sofort zur Serverauswahl</button>
         </div>
+        
+        <!-- HIER WURDE DER BLOCK EINGEFÜGT -->
+        <!-- Unauffälliger Server-Reset am Ende der Seite -->
+        <div id="server-management-container">
+            <h4 style="margin-bottom: 10px; text-align: center;">Notfall-Verwaltung</h4>
+            <button id="force-server-reset-button" class="danger-btn">Server für alle zurücksetzen (Notfall)</button>
+            <p>Achtung: Nutzt die oben im Verbindungs-Abschnitt eingegebene Adresse. Setzt das Spiel für alle Spieler auf eine neue Lobby zurück.</p>
+        </div>
     </div>
 
     <script>
@@ -398,7 +403,8 @@
             }
             toggleNotification('error-message', data.error_message || data.join_error);
             
-            // HINWEIS: Die Sichtbarkeit von #server-management-container wird jetzt durch seine Eltern-Sektion (#connect-section) gesteuert.
+            // HINWEIS: Die Sichtbarkeit von #server-management-container wird jetzt NICHT mehr durch seine Eltern-Sektion gesteuert.
+            // Es ist immer sichtbar.
             if($('#force-server-reset-button')) $('#force-server-reset-button').disabled = false; // Reset-Button ist immer aktiv, wenn sichtbar.
 
             // --- Haupt-Ansichten-Logik ---
