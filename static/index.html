@@ -173,8 +173,6 @@
                 <input type="text" id="server-address" name="server_address" placeholder="host:port (Standard-Port: 65432)" required>
                 <button id="connect-to-server-button">Mit Server verbinden</button>
             </div>
-
-            <!-- DIESER BLOCK WURDE HIER ENTFERNT -->
         </div>
 
         <!-- Schritt 2: Lobby-Registrierung -->
@@ -304,7 +302,6 @@
              <button id="leave-game-now-button" class="action-btn" onclick="handleLeaveAndGoToJoinScreen()">Sofort zur Serverauswahl</button>
         </div>
         
-        <!-- HIER WURDE DER BLOCK EINGEFÜGT -->
         <!-- Unauffälliger Server-Reset am Ende der Seite -->
         <div id="server-management-container">
             <h4 style="margin-bottom: 10px; text-align: center;">Notfall-Verwaltung</h4>
@@ -737,18 +734,38 @@
             $('#request-early-end-button')?.addEventListener('click', (event) => sendClientAction('/request_early_round_end_action', null, event.target));
             $('#skip-task-button')?.addEventListener('click', (event) => sendClientAction('/skip_task', null, event.target));
             
-            // ===== KORRIGIERTE LOGIK FÜR DEN RESET-BUTTON =====
+            // ===== FINALE, HYBRIDE LOGIK FÜR DEN RESET-BUTTON =====
             $('#force-server-reset-button')?.addEventListener('click', async (event) => {
-                const serverAddress = $('#server-address').value;
-                if (!serverAddress) {
-                    toggleNotification('error-message', 'Bitte zuerst eine Server-Adresse für den Reset eingeben.');
-                    setTimeout(() => toggleNotification('error-message', null), 4000);
-                    return;
+                let serverAddress = '';
+
+                // Schritt 1: Finde die korrekte Quelle für die Server-Adresse (der "Hybrid"-Teil).
+                const connectSection = $('#connect-section');
+                const isConnectSectionVisible = connectSection && connectSection.classList.contains('visible');
+
+                if (isConnectSectionVisible) {
+                    // FALL 1: Wir sind auf der Verbindungsseite. Das Eingabefeld ist die "Source of Truth".
+                    serverAddress = $('#server-address').value.trim();
+                    if (!serverAddress) {
+                        toggleNotification('error-message', 'Bitte zuerst eine Server-Adresse für den Reset eingeben.');
+                        setTimeout(() => toggleNotification('error-message', null), 4000);
+                        return;
+                    }
+                } else {
+                    // FALL 2: Wir sind in der Lobby/im Spiel. `currentPlayerData` ist die "Source of Truth".
+                    if (!currentPlayerData || !currentPlayerData.current_server_host || !currentPlayerData.current_server_port) {
+                        toggleNotification('error-message', 'Client-Status noch nicht geladen. Bitte kurz warten und erneut versuchen.');
+                        setTimeout(() => toggleNotification('error-message', null), 4000);
+                        return;
+                    }
+                    const host = currentPlayerData.current_server_host;
+                    const port = currentPlayerData.current_server_port;
+                    serverAddress = `${host}:${port}`;
                 }
                 
+                // Schritt 2: Führe die Aktion mit der ermittelten Adresse aus.
                 if (confirm(`Bist du sicher, dass du den Server unter '${serverAddress}' für ALLE Spieler zurücksetzen möchtest?`)) {
-                    // Wir rufen unseren neuen, intelligenten Endpunkt auf und übergeben ihm
-                    // die Server-Adresse direkt im Payload. Der Client-Proxy kümmert sich um den Rest.
+                    // Die bestehende Route `/force_server_reset_from_ui` ist perfekt,
+                    // da sie die "Verbinden-und-dann-Handeln"-Logik korrekt kapselt.
                     await sendClientAction(
                         '/force_server_reset_from_ui',
                         { server_address: serverAddress },
