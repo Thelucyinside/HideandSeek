@@ -731,28 +731,23 @@
             $('#request-early-end-button')?.addEventListener('click', (event) => sendClientAction('/request_early_round_end_action', null, event.target));
             $('#skip-task-button')?.addEventListener('click', (event) => sendClientAction('/skip_task', null, event.target));
             
-            // NEUE, ROBUSTERE LOGIK FÜR DEN RESET-BUTTON
+            // ===== KORRIGIERTE LOGIK FÜR DEN RESET-BUTTON =====
             $('#force-server-reset-button')?.addEventListener('click', async (event) => {
                 const serverAddress = $('#server-address').value;
                 if (!serverAddress) {
                     toggleNotification('error-message', 'Bitte zuerst eine Server-Adresse für den Reset eingeben.');
+                    setTimeout(() => toggleNotification('error-message', null), 4000);
                     return;
                 }
                 
-                if (confirm(`Bist du sicher, dass du den Server unter '${serverAddress}' für ALLE Spieler zurücksetzen möchtest?\n\n(Hinweis: Zuerst wird eine Verbindung aufgebaut. Klicke den Button danach ggf. erneut, falls der erste Versuch fehlschlägt.)`)) {
-                    const button = event.target;
-                    button.disabled = true;
-
-                    // Schritt 1: Stelle sicher, dass der Client-Proxy (client.py) die richtige Server-Adresse kennt.
-                    // Dies ist die gleiche Aktion wie beim Klick auf "Mit Server verbinden".
-                    await sendClientAction('/connect_to_server', { server_address: serverAddress }, button);
-
-                    // Schritt 2: Sende sofort den Reset-Befehl. 
-                    // Dies kann fehlschlagen, wenn die TCP-Verbindung noch nicht steht. Das ist okay.
-                    // Der Benutzer wurde angewiesen, es ggf. erneut zu versuchen.
-                    await sendClientAction('/force_server_reset_from_ui', null, button);
-                    
-                    button.disabled = false; // Button wieder aktivieren.
+                if (confirm(`Bist du sicher, dass du den Server unter '${serverAddress}' für ALLE Spieler zurücksetzen möchtest?`)) {
+                    // Wir rufen unseren neuen, intelligenten Endpunkt auf und übergeben ihm
+                    // die Server-Adresse direkt im Payload. Der Client-Proxy kümmert sich um den Rest.
+                    await sendClientAction(
+                        '/force_server_reset_from_ui',
+                        { server_address: serverAddress },
+                        event.target
+                    );
                 }
             });
         });
