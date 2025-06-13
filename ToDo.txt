@@ -8,6 +8,7 @@ Spiel:
 - Zone?
 - Power Ups des suchers anpassen
 - Offline Zeitrunterzählen erlauben.
+- Schnellster Weg zu Internet anzeigen
 
 Entwicklung:
 - Entwicklermodus (kürzere Zeit zum Testen)
