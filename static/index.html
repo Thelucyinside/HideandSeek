@@ -299,7 +299,7 @@
                 </table>
             </div>
              <p class="dimmed centered-text" style="margin-top:15px;">Du wirst in Kürze zur Lobby zurückgebracht...</p>
-             <button id="leave-game-now-button" class="action-btn" onclick="handleLeaveAndGoToJoinScreen()">Sofort zur Serverauswahl</button>
+             <!-- Der "sofort zurück" Button wurde wie gewünscht entfernt -->
         </div>
         
         <!-- Unauffälliger Server-Reset am Ende der Seite -->
@@ -385,7 +385,7 @@
             const serverGameStatusDisplay = data.game_state?.status_display || "Lade...";
             const isGameOver = serverGameStatus === GAME_STATE_HIDER_WINS || serverGameStatus === GAME_STATE_SEEKER_WINS;
 
-            // --- Globale Elemente ---
+            // --- Globale Elemente (Benachrichtigungen etc.) ---
             if (data.is_processing_offline_queue) {
                  toggleNotification('game-message', 'Synchronisiere Offline-Aktionen mit dem Server...');
             } else if (data.game_message) {
@@ -399,26 +399,27 @@
                 toggleNotification('game-message', null);
             }
             toggleNotification('error-message', data.error_message || data.join_error);
-            
-            // HINWEIS: Die Sichtbarkeit von #server-management-container wird jetzt NICHT mehr durch seine Eltern-Sektion gesteuert.
-            // Es ist immer sichtbar.
-            if($('#force-server-reset-button')) $('#force-server-reset-button').disabled = false; // Reset-Button ist immer aktiv, wenn sichtbar.
+            if($('#force-server-reset-button')) $('#force-server-reset-button').disabled = false;
 
-            // --- Haupt-Ansichten-Logik ---
-            if (!userHasInitiatedConnection) {
+
+            // =================================================================
+            // --- KORRIGIERTE HAUPT-ANSICHTEN-LOGIK ---
+            // =================================================================
+
+            // Prio 1: Verbindung herstellen oder wiederherstellen.
+            if (!userHasInitiatedConnection || !isSocketConnected) {
                 $('.section#connect-section').classList.add('visible');
-                setText('connect-socket-status-display', 'Bereit zum Verbinden');
-                $('#connect-socket-status-display').className = 'dimmed';
-            } 
-            else if (!isSocketConnected) {
-                $('.section#connect-section').classList.add('visible');
-                setText('connect-socket-status-display', serverGameStatusDisplay);
-                $('#connect-socket-status-display').className = 'status-connecting';
-                if (data.error_message || data.join_error) {
-                    $('#connect-socket-status-display').className = 'status-disconnected';
+                let statusText = "Bereit zum Verbinden";
+                let statusClass = "dimmed";
+                if (userHasInitiatedConnection && !isSocketConnected) {
+                    statusText = serverGameStatusDisplay;
+                    statusClass = (data.error_message || data.join_error) ? 'status-disconnected' : 'status-connecting';
                 }
-            }
-            else if (isSocketConnected && !hasPlayerId && !isGameOver) {
+                setText('connect-socket-status-display', statusText);
+                $('#connect-socket-status-display').className = statusClass;
+
+            // Prio 2: Wenn verbunden, aber keine Spieler-ID -> Registrieren!
+            } else if (!hasPlayerId) {
                 $('.section#lobby-registration-section').classList.add('visible');
                 $('#register-in-lobby-button').disabled = false;
                 const nicknameInput = $('#lobby-nickname');
@@ -429,21 +430,27 @@
                 if (roleChoiceInput && document.activeElement !== roleChoiceInput) {
                     roleChoiceInput.value = data.session_role_choice || 'hider';
                 }
-            } 
-            else if (isSocketConnected && hasPlayerId && !isGameOver) {
+            
+            // Prio 3: Wenn verbunden und Spieler-ID vorhanden -> Spielzustand anzeigen.
+            } else { 
                 const playerAccuracy = data.location?.length > 2 && data.location[2] !== null ? parseFloat(data.location[2]).toFixed(1) : 'N/A';
                 
-                if (serverGameStatus === GAME_STATE_LOBBY) {
+                if (isGameOver) {
+                    $('.section#game-over-section').classList.add('visible');
+                    setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
+                    updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
+                
+                } else if (serverGameStatus === GAME_STATE_LOBBY) {
                     $('.section#lobby-view-section').classList.add('visible');
                     const lobbySocketStatusEl = $('#lobby-socket-connection-status');
-                    setText(lobbySocketStatusEl.id, isSocketConnected ? 'Verbunden' : 'Getrennt');
-                    lobbySocketStatusEl.className = isSocketConnected ? 'status-connected' : 'status-disconnected';
+                    setText(lobbySocketStatusEl.id, 'Verbunden');
+                    lobbySocketStatusEl.className = 'status-connected';
                     updateLobbyPlayerList(data.lobby_players, String(data.player_id));
                     
                     const readyButton = $('#ready-button');
                     readyButton.textContent = data.player_is_ready ? 'Status: Bereit (Klick zum Ändern)' : 'Klicken: Ich bin bereit!';
                     readyButton.className = data.player_is_ready ? 'unready' : 'ready';
-                    readyButton.disabled = !isSocketConnected;
+                    readyButton.disabled = false;
                     
                     setText('lobby-player-name', data.player_name);
                     setText('lobby-player-id', data.player_id);
@@ -453,8 +460,8 @@
                 } else { // HIDER_WAIT oder RUNNING
                     $('.section#ingame-view-section').classList.add('visible');
                     const ingameSocketStatusEl = $('#ingame-socket-connection-status');
-                    setText(ingameSocketStatusEl.id, isSocketConnected ? 'Verbunden' : 'Getrennt');
-                    ingameSocketStatusEl.className = isSocketConnected ? 'status-connected' : 'status-disconnected';
+                    setText(ingameSocketStatusEl.id, 'Verbunden');
+                    ingameSocketStatusEl.className = 'status-connected';
                     
                     setText('ingame-player-name', data.player_name);
                     setText('ingame-player-role', data.role);
@@ -478,7 +485,6 @@
                         toggleVisibility('hider-warning-text', data.hider_location_update_imminent && data.player_status === 'active');
                         updateHiderTask(data.current_task, data.task_skips_available);
                         updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'hider-leaderboard');
-                        toggleVisibility('hider-leaderboard-container', data.hider_leaderboard?.length > 0);
                     }
                     if (data.role === 'seeker') {
                         updateSeekerHiderList(data.hider_locations, isSocketConnected);
@@ -490,20 +496,19 @@
                     toggleVisibility('early-end-vote-container', canVote);
                     if(canVote) {
                         const earlyEndBtn = $('#request-early-end-button');
-                        earlyEndBtn.disabled = data.player_has_requested_early_end || !isSocketConnected;
+                        earlyEndBtn.disabled = data.player_has_requested_early_end;
                         earlyEndBtn.textContent = data.player_has_requested_early_end ? 'Abstimmung gesendet' : 'Runde vorzeitig beenden';
                         setText('early-end-vote-info', `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`);
                     }
                 }
-            } 
-            else if (isGameOver) {
-                $('.section#game-over-section').classList.add('visible');
-                setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
-                updateHiderLeaderboard(data.hider_leaderboard, String(data.player_id), 'game-over-leaderboard');
-                toggleVisibility('game-over-leaderboard-container', data.hider_leaderboard?.length > 0);
             }
 
-            if (hasPlayerId && !isGameOver) startLocationUpdates(); else stopLocationUpdates();
+            // Standort-Updates nur starten, wenn wir ein eingeloggter Spieler im Spiel sind
+            if (hasPlayerId && !isGameOver) {
+                startLocationUpdates();
+            } else {
+                stopLocationUpdates();
+            }
         }
 
         function updateLobbyPlayerList(lobbyPlayers, currentPlayerIdStr) {
@@ -561,13 +566,15 @@
             }
         }
 
-        function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId) {
+        function updateHiderLeaderboard(leaderboardData, currentPlayerIdStr, tableId = 'hider-leaderboard') {
             const containerId = tableId === 'game-over-leaderboard' ? 'game-over-leaderboard-container' : 'hider-leaderboard-container';
             const tbody = $(`#${tableId} tbody`);
             if (!tbody) return;
             tbody.innerHTML = '';
-            const shouldShow = leaderboardData?.length > 0;
+
+            const shouldShow = leaderboardData && leaderboardData.length > 0;
             toggleVisibility(containerId, shouldShow);
+
             if (shouldShow) {
                 leaderboardData.forEach(entry => {
                     const row = tbody.insertRow();
@@ -622,7 +629,6 @@
                 errorData.is_socket_connected_to_server = false;
                 updateUI(errorData);
             } finally {
-                 // Re-enable the button for most actions, but not for ones that cause a definite state change
                 if (triggeringButton && !['/complete_task', '/set_ready', '/return_to_registration'].includes(endpoint)) {
                     triggeringButton.disabled = false;
                 }
@@ -692,10 +698,6 @@
             }
         }
 
-        async function handleLeaveAndGoToJoinScreen() {
-            await sendClientAction('/leave_game_and_go_to_join_screen', null, $('#leave-game-now-button'));
-        }
-
         document.addEventListener('DOMContentLoaded', () => {
             initializeServerInput();
             fetchStatusAndUpdateUI();
@@ -734,16 +736,12 @@
             $('#request-early-end-button')?.addEventListener('click', (event) => sendClientAction('/request_early_round_end_action', null, event.target));
             $('#skip-task-button')?.addEventListener('click', (event) => sendClientAction('/skip_task', null, event.target));
             
-            // ===== FINALE, HYBRIDE LOGIK FÜR DEN RESET-BUTTON =====
             $('#force-server-reset-button')?.addEventListener('click', async (event) => {
                 let serverAddress = '';
-
-                // Schritt 1: Finde die korrekte Quelle für die Server-Adresse (der "Hybrid"-Teil).
                 const connectSection = $('#connect-section');
                 const isConnectSectionVisible = connectSection && connectSection.classList.contains('visible');
 
                 if (isConnectSectionVisible) {
-                    // FALL 1: Wir sind auf der Verbindungsseite. Das Eingabefeld ist die "Source of Truth".
                     serverAddress = $('#server-address').value.trim();
                     if (!serverAddress) {
                         toggleNotification('error-message', 'Bitte zuerst eine Server-Adresse für den Reset eingeben.');
@@ -751,21 +749,15 @@
                         return;
                     }
                 } else {
-                    // FALL 2: Wir sind in der Lobby/im Spiel. `currentPlayerData` ist die "Source of Truth".
                     if (!currentPlayerData || !currentPlayerData.current_server_host || !currentPlayerData.current_server_port) {
                         toggleNotification('error-message', 'Client-Status noch nicht geladen. Bitte kurz warten und erneut versuchen.');
                         setTimeout(() => toggleNotification('error-message', null), 4000);
                         return;
                     }
-                    const host = currentPlayerData.current_server_host;
-                    const port = currentPlayerData.current_server_port;
-                    serverAddress = `${host}:${port}`;
+                    serverAddress = `${currentPlayerData.current_server_host}:${currentPlayerData.current_server_port}`;
                 }
                 
-                // Schritt 2: Führe die Aktion mit der ermittelten Adresse aus.
                 if (confirm(`Bist du sicher, dass du den Server unter '${serverAddress}' für ALLE Spieler zurücksetzen möchtest?`)) {
-                    // Die bestehende Route `/force_server_reset_from_ui` ist perfekt,
-                    // da sie die "Verbinden-und-dann-Handeln"-Logik korrekt kapselt.
                     await sendClientAction(
                         '/force_server_reset_from_ui',
                         { server_address: serverAddress },
