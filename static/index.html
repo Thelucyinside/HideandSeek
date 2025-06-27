@@ -406,36 +406,16 @@
             // --- HIER IST DIE NEUE, KORRIGIERTE HAUPT-ANSICHTEN-LOGIK ---
             // =================================================================
 
-            // Prio 1: Verbindung herstellen oder wiederherstellen.
-            if (!userHasInitiatedConnection || !isSocketConnected) {
-                $('.section#connect-section').classList.add('visible');
-                let statusText = "Bereit zum Verbinden";
-                let statusClass = "dimmed";
-                if (userHasInitiatedConnection && !isSocketConnected) {
-                    statusText = serverGameStatusDisplay;
-                    statusClass = (data.error_message || data.join_error) ? 'status-disconnected' : 'status-connecting';
-                }
-                setText('connect-socket-status-display', statusText);
-                $('#connect-socket-status-display').className = statusClass;
-
-            // Prio 2: Wenn verbunden, aber keine Spieler-ID -> Registrieren!
-            // Dies ist der entscheidende Fix, der den "Stuck on Game Over"-Bug und das Rauswerfen bei Disconnect löst.
-            } else if (!hasPlayerId) {
-                $('.section#lobby-registration-section').classList.add('visible');
-                $('#register-in-lobby-button').disabled = false;
-                const nicknameInput = $('#lobby-nickname');
-                if (nicknameInput && document.activeElement !== nicknameInput) {
-                    nicknameInput.value = data.session_nickname || data.prefill_nickname || '';
-                }
-                const roleChoiceInput = $('#lobby-role-choice');
-                if (roleChoiceInput && document.activeElement !== roleChoiceInput) {
-                    roleChoiceInput.value = data.session_role_choice || 'hider';
-                }
-            
-            // Prio 3: Wenn verbunden und Spieler-ID vorhanden -> Spielzustand anzeigen.
-            } else { 
+            // Prio 1: Hat der Spieler eine ID? Dann ist er im Spielzyklus (Lobby, In-Game, Game Over).
+            if (hasPlayerId) { 
                 const playerAccuracy = data.location?.length > 2 && data.location[2] !== null ? parseFloat(data.location[2]).toFixed(1) : 'N/A';
+                const ingameSocketStatusEl = $('#ingame-socket-connection-status'); // Auch für Lobby und Game-Over wiederverwenden
+                const lobbySocketStatusEl = $('#lobby-socket-connection-status');
                 
+                // Setze den Verbindungsstatus-Text basierend auf isSocketConnected
+                let connectionStatusText = isSocketConnected ? "Verbunden" : "Offline - Verbinde neu...";
+                let connectionStatusClass = isSocketConnected ? "status-connected" : "status-connecting";
+
                 if (isGameOver) {
                     $('.section#game-over-section').classList.add('visible');
                     setText('game-over-message', data.game_state?.game_over_message || "Das Spiel ist vorbei.");
@@ -443,15 +423,15 @@
                 
                 } else if (serverGameStatus === GAME_STATE_LOBBY) {
                     $('.section#lobby-view-section').classList.add('visible');
-                    const lobbySocketStatusEl = $('#lobby-socket-connection-status');
-                    setText(lobbySocketStatusEl.id, 'Verbunden');
-                    lobbySocketStatusEl.className = 'status-connected';
+                    setText(lobbySocketStatusEl.id, connectionStatusText);
+                    lobbySocketStatusEl.className = connectionStatusClass;
+
                     updateLobbyPlayerList(data.lobby_players, String(data.player_id));
                     
                     const readyButton = $('#ready-button');
                     readyButton.textContent = data.player_is_ready ? 'Status: Bereit (Klick zum Ändern)' : 'Klicken: Ich bin bereit!';
                     readyButton.className = data.player_is_ready ? 'unready' : 'ready';
-                    readyButton.disabled = false;
+                    readyButton.disabled = !isSocketConnected; // Deaktiviere bei Offline
                     
                     setText('lobby-player-name', data.player_name);
                     setText('lobby-player-id', data.player_id);
@@ -460,9 +440,8 @@
 
                 } else { // HIDER_WAIT oder RUNNING
                     $('.section#ingame-view-section').classList.add('visible');
-                    const ingameSocketStatusEl = $('#ingame-socket-connection-status');
-                    setText(ingameSocketStatusEl.id, 'Verbunden');
-                    ingameSocketStatusEl.className = 'status-connected';
+                    setText(ingameSocketStatusEl.id, connectionStatusText);
+                    ingameSocketStatusEl.className = connectionStatusClass;
                     
                     setText('ingame-player-name', data.player_name);
                     setText('ingame-player-role', data.role);
@@ -497,12 +476,40 @@
                     toggleVisibility('early-end-vote-container', canVote);
                     if(canVote) {
                         const earlyEndBtn = $('#request-early-end-button');
-                        earlyEndBtn.disabled = data.player_has_requested_early_end;
+                        earlyEndBtn.disabled = data.player_has_requested_early_end || !isSocketConnected;
                         earlyEndBtn.textContent = data.player_has_requested_early_end ? 'Abstimmung gesendet' : 'Runde vorzeitig beenden';
                         setText('early-end-vote-info', `${data.early_end_requests_count || 0} / ${data.total_active_players_for_early_end || 0} Spieler wollen Runde beenden.`);
                     }
                 }
+            
+            // Prio 2: Keine Spieler-ID, aber der Beitrittsprozess wurde gestartet -> Registrierungs-Screen
+            } else if (userHasInitiatedConnection) {
+                $('.section#lobby-registration-section').classList.add('visible');
+                $('#register-in-lobby-button').disabled = !isSocketConnected; // Deaktiviere Button bei Offline
+                const nicknameInput = $('#lobby-nickname');
+                if (nicknameInput && document.activeElement !== nicknameInput) {
+                    nicknameInput.value = data.session_nickname || data.prefill_nickname || '';
+                }
+                const roleChoiceInput = $('#lobby-role-choice');
+                if (roleChoiceInput && document.activeElement !== roleChoiceInput) {
+                    roleChoiceInput.value = data.session_role_choice || 'hider';
+                }
+
+            // Prio 3: Weder Spieler-ID noch Beitrittsprozess gestartet -> Initialer Verbindungs-Screen
+            } else {
+                $('.section#connect-section').classList.add('visible');
+                let statusText = "Bereit zum Verbinden";
+                let statusClass = "dimmed";
+                if (data.error_message || data.join_error) {
+                    statusText = serverGameStatusDisplay;
+                    statusClass = 'status-disconnected';
+                }
+                setText('connect-socket-status-display', statusText);
+                $('#connect-socket-status-display').className = statusClass;
             }
+
+            // --- Ende der korrigierten Logik ---
+
 
             // Standort-Updates nur starten, wenn wir ein eingeloggter Spieler im Spiel sind
             if (hasPlayerId && !isGameOver) {
