@@ -86,13 +86,10 @@ def send_message_to_server(data):
     socket_is_currently_connected = False
     with client_data_lock: # Prüfe den aktuellen Verbindungsstatus unter Lock
         socket_is_currently_connected = client_view_data["is_socket_connected_to_server"]
-    
-    # print(f"CLIENT SEND: Attempting to send action '{action_sent}'. Socket global: {'Exists' if server_socket_global else 'None'}, Connected-Flag: {socket_is_currently_connected}, Socket Obj: {server_socket_global}")
 
     if server_socket_global and socket_is_currently_connected:
         try:
             server_socket_global.sendall(json.dumps(data).encode('utf-8') + b'\n')
-            # print(f"CLIENT SEND: Action '{action_sent}' sent successfully.")
             return True
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             print(f"CLIENT SEND (ERROR): Senden von '{action_sent}' fehlgeschlagen, Verbindung verloren: {e}.")
@@ -152,7 +149,7 @@ def process_offline_queue():
         elif failed_actions_to_re_queue:
              client_view_data["error_message"] = f"{len(failed_actions_to_re_queue)} Offline-Aktion(en) konnte(n) nicht synchronisiert werden."
         else: 
-            client_view_data["game_message"] = None # Lösche ggf. alte Nachrichten
+            client_view_data["game_message"] = None
     print(f"CLIENT OFFLINE QUEUE: Verarbeitung beendet. {successfully_sent_actions_count} gesendet. {len(client_view_data.get('offline_action_queue',[]))} verbleiben.")
 
 
@@ -405,7 +402,7 @@ def network_communication_thread():
                 time.sleep(1) 
 
 
-# --- Flask Webserver Routen ---
+# --- Flask Webserver Routen (Originalzustand wiederhergestellt) ---
 
 @app.route('/')
 def index_page_route(): return send_from_directory(app.static_folder, 'index.html')
@@ -536,37 +533,26 @@ def update_location_from_browser():
     elif not game_can_receive_loc: return jsonify({"success":False, "message":f"Spielstatus '{game_status_local}' erlaubt keine Standortupdates."}), 400
     else: return jsonify({"success": False, "message": "Keine aktive Socket-Verbindung zum Spielserver."}), 503
 
-def handle_generic_action(action_name, payload_key=None, payload_value_from_request=None, requires_player_id=True):
-    """Hilfsfunktion zum Senden generischer Aktionen an den Server."""
-    action_payload = {"action": action_name}; player_id_for_action = None
-
-    if requires_player_id:
-        with client_data_lock: player_id_for_action = client_view_data.get("player_id")
-        if not player_id_for_action:
-            with client_data_lock:
-                temp_cvd = client_view_data.copy()
-                temp_cvd["session_nickname"] = session.get("nickname")
-                temp_cvd["session_role_choice"] = session.get("role_choice")
-            return jsonify({"success": False, "message": f"Aktion '{action_name}' nicht möglich (keine Spieler-ID).", **temp_cvd }), 403
-
-    if payload_key: 
-        req_data = request.get_json()
-        if req_data is None: return jsonify({"success": False, "message": "Keine JSON-Daten im Request."}), 400
-        val_from_req = req_data.get(payload_value_from_request or payload_key)
-        if val_from_req is None: return jsonify({"success": False, "message": f"Fehlender Wert für '{payload_key}' in Request-Daten."}), 400
-        action_payload[payload_key] = val_from_req 
-
-    success_sent = send_message_to_server(action_payload)
+@app.route('/set_ready', methods=['POST'])
+def set_ready_route():
+    data = request.get_json()
+    if data is None or 'ready_status' not in data:
+        return jsonify({"success": False, "message": "ready_status fehlt"}), 400
+    
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None 
+        player_id = client_view_data.get("player_id")
+    
+    if not player_id:
+        return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
+        
+    action_payload = {"action": "SET_READY", "ready_status": data['ready_status']}
+    success = send_message_to_server(action_payload)
+    
+    with client_data_lock:
+        if success: client_view_data["error_message"] = None
         response_data = client_view_data.copy()
-        response_data["action_send_success"] = success_sent 
-        response_data["session_nickname"] = session.get("nickname")
-        response_data["session_role_choice"] = session.get("role_choice")
     return jsonify(response_data)
 
-@app.route('/set_ready', methods=['POST'])
-def set_ready_route(): return handle_generic_action("SET_READY", "ready_status", "ready_status")
 
 @app.route('/complete_task', methods=['POST'])
 def complete_task_route():
@@ -580,15 +566,11 @@ def complete_task_route():
 
     if not player_id_local or not is_hider_active:
         with client_data_lock: temp_cvd = client_view_data.copy()
-        temp_cvd["session_nickname"] = session.get("nickname")
-        temp_cvd["session_role_choice"] = session.get("role_choice")
-        return jsonify({"success": False, "message": "Aktion nicht möglich (kein aktiver Hider oder keine Spieler-ID).", **temp_cvd}), 403
+        return jsonify({"success": False, "message": "Aktion nicht möglich (kein aktiver Hider).", **temp_cvd}), 403
 
     if not current_task_local or not current_task_local.get("id"):
         with client_data_lock: temp_cvd = client_view_data.copy()
-        temp_cvd["session_nickname"] = session.get("nickname")
-        temp_cvd["session_role_choice"] = session.get("role_choice")
-        return jsonify({"success": False, "message": "Keine aktive Aufgabe zum Erledigen vorhanden.", **temp_cvd}), 400
+        return jsonify({"success": False, "message": "Keine aktive Aufgabe.", **temp_cvd}), 400
 
     task_id_to_complete = current_task_local["id"]
     task_description_for_ui_msg = current_task_local.get("description", "Unbekannte Aufgabe")
@@ -599,7 +581,6 @@ def complete_task_route():
         with client_data_lock:
             if success_sent: client_view_data["error_message"] = None
             response_data = client_view_data.copy()
-            response_data["action_send_success"] = success_sent
         return jsonify(response_data)
     else: 
         offline_action_for_server = {
@@ -616,24 +597,68 @@ def complete_task_route():
             client_view_data["game_message"] = offline_package["ui_message_on_cache"]
             client_view_data["current_task"] = None
             response_data = client_view_data.copy()
-            response_data["action_send_success"] = True 
         print(f"CLIENT FLASK: Aufgabe '{task_description_for_ui_msg}' offline erledigt, zur Queue hinzugefügt.")
         return jsonify(response_data)
 
 @app.route('/catch_hider', methods=['POST'])
-def catch_hider_route(): return handle_generic_action("CATCH_HIDER", "hider_id_to_catch", "hider_id_to_catch")
+def catch_hider_route():
+    data = request.get_json()
+    if data is None or 'hider_id_to_catch' not in data:
+        return jsonify({"success": False, "message": "hider_id_to_catch fehlt"}), 400
+    
+    with client_data_lock:
+        player_id = client_view_data.get("player_id")
+    if not player_id:
+        return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
+        
+    action_payload = {"action": "CATCH_HIDER", "hider_id_to_catch": data['hider_id_to_catch']}
+    send_message_to_server(action_payload)
+    
+    with client_data_lock:
+        return jsonify(client_view_data.copy())
 
 @app.route('/request_early_round_end_action', methods=['POST'])
-def request_early_round_end_action_route(): return handle_generic_action("REQUEST_EARLY_ROUND_END")
+def request_early_round_end_action_route():
+    with client_data_lock:
+        player_id = client_view_data.get("player_id")
+    if not player_id:
+        return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
+
+    send_message_to_server({"action": "REQUEST_EARLY_ROUND_END"})
+    with client_data_lock:
+        return jsonify(client_view_data.copy())
 
 @app.route('/skip_task', methods=['POST'])
-def skip_task_route(): return handle_generic_action("SKIP_TASK")
+def skip_task_route():
+    with client_data_lock:
+        player_id = client_view_data.get("player_id")
+    if not player_id:
+        return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
+        
+    send_message_to_server({"action": "SKIP_TASK"})
+    with client_data_lock:
+        return jsonify(client_view_data.copy())
 
 @app.route('/force_server_reset_from_ui', methods=['POST'])
-def force_server_reset_route(): return handle_generic_action("FORCE_SERVER_RESET_FROM_CLIENT", "server_address", "server_address", requires_player_id=False)
+def force_server_reset_route():
+    with client_data_lock:
+        player_id = client_view_data.get("player_id")
+    # This action does not strictly require a player_id, but it's good practice
+    
+    send_message_to_server({"action": "FORCE_SERVER_RESET_FROM_CLIENT"})
+    with client_data_lock:
+        return jsonify(client_view_data.copy())
 
 @app.route('/return_to_registration', methods=['POST'])
-def return_to_registration_route(): return handle_generic_action("RETURN_TO_REGISTRATION")
+def return_to_registration_route():
+    with client_data_lock:
+        player_id = client_view_data.get("player_id")
+    if not player_id:
+        return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
+        
+    send_message_to_server({"action": "RETURN_TO_REGISTRATION"})
+    with client_data_lock:
+        return jsonify(client_view_data.copy())
 
 if __name__ == '__main__':
     print("CLIENT: Initialisiere Client...")
