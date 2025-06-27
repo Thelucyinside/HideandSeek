@@ -419,7 +419,7 @@
                 $('#connect-socket-status-display').className = statusClass;
 
             // Prio 2: Wenn verbunden, aber keine Spieler-ID -> Registrieren!
-            // Dies ist der entscheidende Fix, der den "Stuck on Game Over"-Bug löst.
+            // Dies ist der entscheidende Fix, der den "Stuck on Game Over"-Bug und das Rauswerfen bei Disconnect löst.
             } else if (!hasPlayerId) {
                 $('.section#lobby-registration-section').classList.add('visible');
                 $('#register-in-lobby-button').disabled = false;
