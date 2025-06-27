@@ -12,7 +12,7 @@ from flask import Flask, jsonify, request, send_from_directory, session
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 65432
 FLASK_PORT = 5000
-STATIC_FOLDER = '.'
+STATIC_FOLDER = '.' # Geändert, um index.html im selben Verzeichnis zu finden
 
 # Das globale Dictionary, das die Daten für die UI bereithält
 client_view_data = {
@@ -22,8 +22,8 @@ client_view_data = {
     "location": None,
     "confirmed_for_lobby": False,
     "player_is_ready": False,
-    "player_status": "active", # active, caught, failed_task, failed_loc_update, offline (NEU)
-    "user_has_initiated_connection": False, # NEU: Flag, der steuert, ob der Client überhaupt eine Verbindung aufbauen soll.
+    "player_status": "active", # active, caught, failed_task, failed_loc_update, offline
+    "user_has_initiated_connection": False, # Flag, der steuert, ob der Client überhaupt eine Verbindung aufbauen soll.
     "is_socket_connected_to_server": False, # Status der direkten Socket-Verbindung zum Spielserver
     "game_state": {
         "status": "disconnected",
@@ -48,9 +48,9 @@ client_view_data = {
     "current_server_host": SERVER_HOST, # Aktuell konfigurierter Server-Host
     "current_server_port": SERVER_PORT, # Aktuell konfigurierter Server-Port
     "task_skips_available": 0, # Für Hider
-    "offline_action_queue": [],  # NEU: Liste für {action_for_server: {...}, ui_message_on_cache: "..."}
-    "is_processing_offline_queue": False, # NEU: Flag für UI-Feedback
-    "pre_cached_tasks": [], # NEU: Für Aufgaben-Pre-Caching
+    "offline_action_queue": [],  # Liste für {action_for_server: {...}, ui_message_on_cache: "..."}
+    "is_processing_offline_queue": False, # Flag für UI-Feedback
+    "pre_cached_tasks": [], # Für Aufgaben-Pre-Caching
 }
 client_data_lock = threading.Lock() # Lock für den sicheren Zugriff auf client_view_data
 server_socket_global = None # Der globale Socket zum Spielserver
@@ -65,7 +65,7 @@ GAME_STATE_SEEKER_WINS = "seeker_wins"
 
 app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='')
 # ACHTUNG: Diesen Secret Key unbedingt ändern, wenn die App produktiv genutzt wird!
-app.secret_key = "dein_super_geheimer_und_einzigartiger_schluessel_hier_aendern_DRINGEND_PYTHONANYWHERE"
+app.secret_key = "dein_super_geheimer_und_einzigartiger_schluessel_hier_aendern_DRINGEND"
 
 def show_termux_notification(title, content, notification_id=None):
     """Zeigt eine Termux-Benachrichtigung an, falls Termux installiert ist."""
@@ -86,13 +86,10 @@ def send_message_to_server(data):
     socket_is_currently_connected = False
     with client_data_lock: # Prüfe den aktuellen Verbindungsstatus unter Lock
         socket_is_currently_connected = client_view_data["is_socket_connected_to_server"]
-    
-    # print(f"CLIENT SEND: Attempting to send action '{action_sent}'. Socket global: {'Exists' if server_socket_global else 'None'}, Connected-Flag: {socket_is_currently_connected}, Socket Obj: {server_socket_global}")
 
     if server_socket_global and socket_is_currently_connected:
         try:
             server_socket_global.sendall(json.dumps(data).encode('utf-8') + b'\n')
-            # print(f"CLIENT SEND: Action '{action_sent}' sent successfully.")
             return True
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             print(f"CLIENT SEND (ERROR): Senden von '{action_sent}' fehlgeschlagen, Verbindung verloren: {e}.")
@@ -107,10 +104,8 @@ def send_message_to_server(data):
                 client_view_data["is_socket_connected_to_server"] = False
                 client_view_data["error_message"] = "Unerwarteter Fehler beim Senden an Server."
     else:
-        # Dieses Log ist sehr wichtig, um zu sehen, warum nicht gesendet wurde.
         print(f"CLIENT SEND (NO CONN): Aktion '{action_sent}' nicht gesendet. Socket: {server_socket_global}, Connected-Flag: {socket_is_currently_connected}")
         with client_data_lock:
-            # Falls kein Socket oder der Status schon als getrennt markiert ist
             client_view_data["is_socket_connected_to_server"] = False # Sicherstellen, dass es False ist
             if not client_view_data.get("error_message"): # Nur setzen, wenn nicht schon ein anderer Fehler da ist
                  client_view_data["error_message"] = f"Nicht mit Server verbunden. Aktion '{action_sent}' nicht gesendet."
@@ -123,11 +118,10 @@ def process_offline_queue():
     """
     with client_data_lock:
         if not client_view_data.get("offline_action_queue") or client_view_data.get("is_processing_offline_queue"):
-            # print(f"CLIENT OFFLINE QUEUE: Skipping processing. Queue empty or already processing. Queue len: {len(client_view_data.get('offline_action_queue', []))}, Processing flag: {client_view_data.get('is_processing_offline_queue')}")
             return
         client_view_data["is_processing_offline_queue"] = True
         queue_to_process = list(client_view_data["offline_action_queue"]) # Kopie erstellen
-        client_view_data["offline_action_queue"].clear() # Original-Queue leeren, um neue Offline-Aktionen zu sammeln, während diese verarbeitet wird
+        client_view_data["offline_action_queue"].clear() 
 
     print(f"CLIENT OFFLINE QUEUE: Starte Verarbeitung von {len(queue_to_process)} Offline-Aktionen.")
     successfully_sent_actions_count = 0
@@ -136,33 +130,27 @@ def process_offline_queue():
     for offline_action_package in queue_to_process:
         action_to_send_to_server = offline_action_package.get("action_for_server")
         if action_to_send_to_server:
-            # print(f"CLIENT OFFLINE QUEUE: Versuche Aktion zu senden: {action_to_send_to_server.get('action')}")
-            # Versuche zu senden. send_message_to_server aktualisiert is_socket_connected_to_server bei Fehler.
             if send_message_to_server(action_to_send_to_server):
-                # print(f"CLIENT OFFLINE QUEUE: Offline-Aktion '{action_to_send_to_server.get('action')}' erfolgreich an Server gesendet.")
                 successfully_sent_actions_count += 1
             else:
-                print(f"CLIENT OFFLINE QUEUE: Senden der Offline-Aktion '{action_to_send_to_server.get('action')}' fehlgeschlagen.")
                 failed_actions_to_re_queue.append(offline_action_package)
-                # Falls die Verbindung erneut abbricht, breche ab, um nicht sinnlos zu versuchen
                 with client_data_lock:
                     if not client_view_data["is_socket_connected_to_server"]:
                         print("CLIENT OFFLINE QUEUE: Verbindung während Verarbeitung verloren. Breche ab.")
-                        break # Beende Schleife, Rest wird re-queued.
+                        break 
         else:
             print(f"CLIENT ERROR: Ungültiges Offline-Aktions-Paket: {offline_action_package}")
 
     with client_data_lock:
-        # Füge die fehlgeschlagenen Aktionen wieder an den Anfang der (jetzt möglicherweise wieder gefüllten) globalen Queue
         client_view_data["offline_action_queue"] = failed_actions_to_re_queue + client_view_data["offline_action_queue"]
         client_view_data["is_processing_offline_queue"] = False
         if not client_view_data["offline_action_queue"] and successfully_sent_actions_count > 0 :
              client_view_data["game_message"] = "Alle Offline-Aktionen erfolgreich synchronisiert."
         elif failed_actions_to_re_queue:
              client_view_data["error_message"] = f"{len(failed_actions_to_re_queue)} Offline-Aktion(en) konnte(n) nicht synchronisiert werden."
-        else: # Keine Aktionen in Queue, aber auch keine gesendet (oder alle waren schon vorher leer)
-            client_view_data["game_message"] = None # Lösche ggf. alte Nachrichten
-    # print(f"CLIENT OFFLINE QUEUE: Verarbeitung beendet. {successfully_sent_actions_count} gesendet. {len(client_view_data['offline_action_queue'])} verbleiben.")
+        else: 
+            client_view_data["game_message"] = None
+    print(f"CLIENT OFFLINE QUEUE: Verarbeitung beendet. {successfully_sent_actions_count} gesendet. {len(client_view_data.get('offline_action_queue',[]))} verbleiben.")
 
 
 def network_communication_thread():
@@ -172,7 +160,7 @@ def network_communication_thread():
     Alle eingehenden Nachrichten vom Server werden hier verarbeitet und in `client_view_data` aktualisiert.
     """
     global server_socket_global, client_view_data, SERVER_HOST, SERVER_PORT
-    buffer = "" # Puffer für unvollständige Nachrichtenpakete
+    buffer = "" 
     print("CLIENT NET: Network communication thread started.")
 
     while True:
@@ -187,7 +175,6 @@ def network_communication_thread():
                 client_view_data["game_state"]["status_display"] = "Bereit zum Verbinden mit einem Server."
             
             if server_socket_global:
-                # print(f"CLIENT NET: User does not want to connect, closing existing socket {server_socket_global}")
                 try: server_socket_global.close()
                 except: pass
                 server_socket_global = None
@@ -201,38 +188,32 @@ def network_communication_thread():
             current_host_to_connect = client_view_data["current_server_host"]
             current_port_to_connect = client_view_data["current_server_port"]
 
-
         if not socket_should_be_connected: 
             try:
                 with client_data_lock:
-                    client_view_data["is_socket_connected_to_server"] = False 
+                    client_view_data["is_socket_connected_to_server"] = False
                     if not client_view_data.get("error_message") and not client_view_data.get("join_error"):
                          client_view_data["game_state"]["status_display"] = f"Verbinde mit {current_host_to_connect}:{current_port_to_connect}..."
 
-                # print(f"CLIENT NET: Neuer Verbindungsversuch zu {current_host_to_connect}:{current_port_to_connect}")
-                
                 if server_socket_global:
-                    # print(f"CLIENT NET: Schließe alten Socket {server_socket_global} vor neuem Verbindungsversuch.")
                     try: server_socket_global.close()
                     except: pass
                     server_socket_global = None
 
                 temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                temp_sock.settimeout(5) 
+                temp_sock.settimeout(5)
                 temp_sock.connect((current_host_to_connect, current_port_to_connect))
-                # print(f"CLIENT NET: Erfolgreich verbunden mit {current_host_to_connect}:{current_port_to_connect}. Socket: {temp_sock}")
                 temp_sock.settimeout(None)
                 server_socket_global = temp_sock
                 buffer = "" 
 
                 with client_data_lock:
                     client_view_data["is_socket_connected_to_server"] = True
-                    client_view_data["error_message"] = None 
+                    client_view_data["error_message"] = None
                     client_view_data["game_state"]["status_display"] = "Verbunden. Warte auf Server-Antwort."
 
                     if client_view_data.get("offline_action_queue") and \
                        not client_view_data.get("is_processing_offline_queue"):
-                        # print("CLIENT NET: Verbindung hergestellt, starte Verarbeitung der Offline-Queue...")
                         threading.Thread(target=process_offline_queue, daemon=True).start()
                     
                     if client_view_data.get("player_id") and client_view_data.get("player_name"):
@@ -244,16 +225,12 @@ def network_communication_thread():
                         try:
                             server_socket_global.sendall(json.dumps(rejoin_payload).encode('utf-8') + b'\n')
                             client_view_data["game_state"]["status_display"] = f"Sende Rejoin-Anfrage als {client_view_data['player_name']}..."
-                            # print(f"CLIENT NET: REJOIN_GAME für {client_view_data['player_name']} ({client_view_data['player_id']}) gesendet.")
                         except Exception as e_rejoin:
                             print(f"CLIENT NET: Senden von REJOIN_GAME fehlgeschlagen: {e_rejoin}.")
-                            traceback.print_exc()
                             client_view_data["is_socket_connected_to_server"] = False
                             client_view_data["error_message"] = "Senden der Rejoin-Anfrage fehlgeschlagen."
-                    else: 
-                        # print("CLIENT NET: Keine Spieler-ID/Name für Rejoin vorhanden. Warte auf JOIN oder Server-Update.")
-                        pass
-
+                    else:
+                        print("CLIENT NET: Keine Spieler-ID/Name für Rejoin vorhanden. Warte auf JOIN oder Server-Update.")
 
             except socket.timeout:
                 print(f"CLIENT NET (CONNECT TIMEOUT): Verbindung zu {current_host_to_connect}:{current_port_to_connect} Zeitüberschreitung.")
@@ -272,7 +249,6 @@ def network_communication_thread():
         with client_data_lock:
             if not client_view_data["is_socket_connected_to_server"]:
                 if server_socket_global:
-                    # print(f"CLIENT NET: Socket-Verbindung im Aufbau-Block als 'nicht verbunden' markiert. Schließe Socket {server_socket_global}.")
                     try: server_socket_global.close()
                     except: pass
                     server_socket_global = None
@@ -281,7 +257,6 @@ def network_communication_thread():
 
         try:
             if not server_socket_global:
-                print("CLIENT NET (RECEIVE ERROR): server_socket_global ist None trotz is_socket_connected_to_server=True. Setze auf False.")
                 with client_data_lock: client_view_data["is_socket_connected_to_server"] = False
                 time.sleep(0.1); continue
 
@@ -305,7 +280,6 @@ def network_communication_thread():
                     msg_type = message.get("type")
 
                     if msg_type == "game_update":
-                        # *** HIER IST DIE EINE, WICHTIGE ÄNDERUNG ***
                         if "player_id" in message and message["player_id"] is None:
                             is_definitive_kick_out = bool(message.get("join_error")) or \
                                                      "Du bist nicht mehr Teil des aktuellen Spiels" in message.get("error_message", "") or \
@@ -342,8 +316,6 @@ def network_communication_thread():
                                 print(f"CLIENT NET: Eigene Player ID vom Server erhalten/geändert zu: {message['player_id']}")
                             client_view_data["player_id"] = message["player_id"]
                             client_view_data["join_error"] = None
-                        
-                        # *** ENDE DER ÄNDERUNG ***
 
                         update_keys = [
                             "player_name", "role", "confirmed_for_lobby", "player_is_ready",
@@ -430,7 +402,7 @@ def network_communication_thread():
                 time.sleep(1) 
 
 
-# --- Flask Webserver Routen (Originalzustand) ---
+# --- Flask Webserver Routen (Originalzustand wiederhergestellt) ---
 
 @app.route('/')
 def index_page_route(): return send_from_directory(app.static_folder, 'index.html')
@@ -443,6 +415,7 @@ def service_worker_route(): return send_from_directory(app.static_folder, 'sw.js
 
 @app.route('/status', methods=['GET'])
 def get_status():
+    """Gibt den aktuellen Zustand des Clients als JSON für die UI zurück."""
     with client_data_lock:
         client_view_data["current_server_host"] = SERVER_HOST 
         client_view_data["current_server_port"] = SERVER_PORT
@@ -453,6 +426,7 @@ def get_status():
 
 @app.route('/connect_to_server', methods=['POST'])
 def connect_to_server_route():
+    """Stellt nur die Verbindung zum Server her, ohne einen Spieler zu registrieren."""
     global SERVER_HOST, SERVER_PORT, server_socket_global
     data = request.get_json()
     if not data or 'server_address' not in data:
@@ -489,11 +463,7 @@ def connect_to_server_route():
             "is_socket_connected_to_server": False, 
         })
 
-    if server_socket_global:
-        if server_details_changed:
-            print(f"CLIENT FLASK: Server details changed, shutting down old socket: {server_socket_global}")
-        else:
-            print(f"CLIENT FLASK: Re-connecting to same server, shutting down existing socket: {server_socket_global}")
+    if server_socket_global and server_details_changed:
         try:
             server_socket_global.shutdown(socket.SHUT_RDWR)
             server_socket_global.close()
@@ -511,6 +481,7 @@ def connect_to_server_route():
 
 @app.route('/register_player_details', methods=['POST'])
 def register_player_details_route():
+    """Registriert den Spieler mit Namen und Rolle auf dem verbundenen Server."""
     data = request.get_json()
     nickname, role_choice = data.get('nickname'), data.get('role')
 
@@ -540,6 +511,7 @@ def register_player_details_route():
 
 @app.route('/update_location_from_browser', methods=['POST'])
 def update_location_from_browser():
+    """Empfängt Standortdaten vom Browser und leitet sie an den Spielserver weiter."""
     data = request.get_json()
     if not data: return jsonify({"success": False, "message": "Keine Daten."}), 400
     lat, lon, accuracy = data.get('lat'), data.get('lon'), data.get('accuracy')
@@ -569,14 +541,15 @@ def set_ready_route():
     
     with client_data_lock:
         player_id = client_view_data.get("player_id")
+    
     if not player_id:
         return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
         
     action_payload = {"action": "SET_READY", "ready_status": data['ready_status']}
-    success_sent = send_message_to_server(action_payload)
+    success = send_message_to_server(action_payload)
     
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None 
+        if success: client_view_data["error_message"] = None
         response_data = client_view_data.copy()
     return jsonify(response_data)
 
@@ -593,11 +566,11 @@ def complete_task_route():
 
     if not player_id_local or not is_hider_active:
         with client_data_lock: temp_cvd = client_view_data.copy()
-        return jsonify({"success": False, "message": "Aktion nicht möglich (kein aktiver Hider oder keine Spieler-ID).", **temp_cvd}), 403
+        return jsonify({"success": False, "message": "Aktion nicht möglich (kein aktiver Hider).", **temp_cvd}), 403
 
     if not current_task_local or not current_task_local.get("id"):
         with client_data_lock: temp_cvd = client_view_data.copy()
-        return jsonify({"success": False, "message": "Keine aktive Aufgabe zum Erledigen vorhanden.", **temp_cvd}), 400
+        return jsonify({"success": False, "message": "Keine aktive Aufgabe.", **temp_cvd}), 400
 
     task_id_to_complete = current_task_local["id"]
     task_description_for_ui_msg = current_task_local.get("description", "Unbekannte Aufgabe")
@@ -627,7 +600,6 @@ def complete_task_route():
         print(f"CLIENT FLASK: Aufgabe '{task_description_for_ui_msg}' offline erledigt, zur Queue hinzugefügt.")
         return jsonify(response_data)
 
-
 @app.route('/catch_hider', methods=['POST'])
 def catch_hider_route():
     data = request.get_json()
@@ -640,12 +612,10 @@ def catch_hider_route():
         return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
         
     action_payload = {"action": "CATCH_HIDER", "hider_id_to_catch": data['hider_id_to_catch']}
-    success_sent = send_message_to_server(action_payload)
+    send_message_to_server(action_payload)
     
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None
-        response_data = client_view_data.copy()
-    return jsonify(response_data)
+        return jsonify(client_view_data.copy())
 
 @app.route('/request_early_round_end_action', methods=['POST'])
 def request_early_round_end_action_route():
@@ -654,11 +624,9 @@ def request_early_round_end_action_route():
     if not player_id:
         return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
 
-    success_sent = send_message_to_server({"action": "REQUEST_EARLY_ROUND_END"})
+    send_message_to_server({"action": "REQUEST_EARLY_ROUND_END"})
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None
-        response_data = client_view_data.copy()
-    return jsonify(response_data)
+        return jsonify(client_view_data.copy())
 
 @app.route('/skip_task', methods=['POST'])
 def skip_task_route():
@@ -667,20 +635,19 @@ def skip_task_route():
     if not player_id:
         return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
         
-    success_sent = send_message_to_server({"action": "SKIP_TASK"})
+    send_message_to_server({"action": "SKIP_TASK"})
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None
-        response_data = client_view_data.copy()
-    return jsonify(response_data)
+        return jsonify(client_view_data.copy())
 
 @app.route('/force_server_reset_from_ui', methods=['POST'])
 def force_server_reset_route():
-    # Diese Aktion erfordert keine Spieler-ID, sie ist ein Notfall-Tool
-    success_sent = send_message_to_server({"action": "FORCE_SERVER_RESET_FROM_CLIENT"})
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None
-        response_data = client_view_data.copy()
-    return jsonify(response_data)
+        player_id = client_view_data.get("player_id")
+    # This action does not strictly require a player_id, but it's good practice
+    
+    send_message_to_server({"action": "FORCE_SERVER_RESET_FROM_CLIENT"})
+    with client_data_lock:
+        return jsonify(client_view_data.copy())
 
 @app.route('/return_to_registration', methods=['POST'])
 def return_to_registration_route():
@@ -689,42 +656,9 @@ def return_to_registration_route():
     if not player_id:
         return jsonify({"success": False, "message": "Keine Spieler-ID."}), 403
         
-    success_sent = send_message_to_server({"action": "RETURN_TO_REGISTRATION"})
+    send_message_to_server({"action": "RETURN_TO_REGISTRATION"})
     with client_data_lock:
-        if success_sent: client_view_data["error_message"] = None
-        response_data = client_view_data.copy()
-    return jsonify(response_data)
-
-@app.route('/leave_game_and_go_to_join_screen', methods=['POST'])
-def leave_game_and_go_to_join_screen_route():
-    original_player_id_if_any = None
-    
-    with client_data_lock:
-        original_player_id_if_any = client_view_data.get("player_id")
-
-        client_view_data.update({
-            "user_has_initiated_connection": False,
-            "is_socket_connected_to_server": False, 
-            "player_id": None, "player_name": None, "role": None,
-            "confirmed_for_lobby": False, "player_is_ready": False,
-            "join_error": None, "error_message": None, 
-            "offline_action_queue": [],
-            "is_processing_offline_queue": False, 
-        })
-        if "game_state" in client_view_data:
-            client_view_data["game_state"]["status"] = "disconnected"
-            client_view_data["game_state"]["status_display"] = "Zurück zum Startbildschirm..."
-        print(f"CLIENT FLASK (Leave): Lokaler Client-Zustand zurückgesetzt. Player ID war: {original_player_id_if_any}")
-
-    if original_player_id_if_any and server_socket_global:
-        send_message_to_server({"action": "LEAVE_GAME_AND_GO_TO_JOIN"})
-
-    session.pop("nickname", None); session.pop("role_choice", None)
-    
-    with client_data_lock:
-        response_payload = client_view_data.copy()
-    return jsonify(response_payload)
-
+        return jsonify(client_view_data.copy())
 
 if __name__ == '__main__':
     print("CLIENT: Initialisiere Client...")
